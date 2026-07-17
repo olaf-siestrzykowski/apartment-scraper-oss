@@ -139,7 +139,6 @@ the URL:
 
 ```
 https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms/edit
-                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ```
 
 **Multiple profiles**
@@ -152,8 +151,8 @@ band, or city. Each profile syncs to its own sheet and sends its own email diges
   "profiles": [
     {
       "name": "mokotow",
-      "olx_url": "https://www.olx.pl/...",
-      "otodom_url": "https://www.otodom.pl/...",
+      "olx_url": "https://www.olx.pl/nieruchomosci/mieszkania/wynajem/warszawa/?search%5Bdistrict_id%5D=300",
+      "otodom_url": "https://www.otodom.pl/pl/wyniki/wynajem/mieszkanie/wiele-lokalizacji?locations=%5Bmazowieckie%2Fwarszawa%2Fwarszawa%2Fwarszawa%2Fmokotow%5D",
       "sheet_id": "SHEET_ID_A",
       "origin_address": "Rondo ONZ 1, 00-124 Warszawa, Poland",
       "city": "Warszawa",
@@ -165,16 +164,30 @@ band, or city. Each profile syncs to its own sheet and sends its own email diges
       "language": "en"
     },
     {
-      "name": "zoliborz",
-      "olx_url": "https://www.olx.pl/...",
-      "otodom_url": "https://www.otodom.pl/...",
+      "name": "krakow-srodmiescie",
+      "olx_url": "https://www.olx.pl/nieruchomosci/mieszkania/wynajem/krakow/?search%5Bfilter_float_price%3Ato%5D=4000",
+      "otodom_url": "https://www.otodom.pl/pl/wyniki/wynajem/mieszkanie/malopolskie/krakow/krakow/krakow/srodmiescie?priceMax=4000",
       "sheet_id": "SHEET_ID_B",
-      "origin_address": "Rondo ONZ 1, 00-124 Warszawa, Poland",
-      "city": "Warszawa",
+      "origin_address": "Rynek Główny 1, 31-042 Kraków, Poland",
+      "city": "Kraków",
       "email_sender": "you@gmail.com",
       "email_recipient": "you@gmail.com",
       "email_app_password": "abcd efgh ijkl mnop",
-      "email_districts": "Żoliborz",
+      "email_districts": "Śródmieście, Stare Miasto, Krowodrza",
+      "email_top_n": 10,
+      "language": "pl"
+    },
+    {
+      "name": "gdansk-wrzeszcz",
+      "olx_url": "https://www.olx.pl/nieruchomosci/mieszkania/wynajem/gdansk/",
+      "otodom_url": "https://www.otodom.pl/pl/wyniki/wynajem/mieszkanie/pomorskie/gdansk/gdansk/gdansk",
+      "sheet_id": "SHEET_ID_C",
+      "origin_address": "Długi Targ 1, 80-828 Gdańsk, Poland",
+      "city": "Gdańsk",
+      "email_sender": "you@gmail.com",
+      "email_recipient": "you@gmail.com",
+      "email_app_password": "abcd efgh ijkl mnop",
+      "email_districts": "Wrzeszcz, Oliwa, Śródmieście",
       "email_top_n": 10,
       "language": "pl"
     }
@@ -257,6 +270,30 @@ What the digest contains:
 The digest sends only when there are qualifying offers. If nothing passes the quality
 gate, no email is sent (no noise).
 
+**How Telegram notifications work**
+
+Add `telegram_bot_token` and `telegram_chat_id` to a profile to receive a Telegram
+message after each scrape run. The message shows new offer count, total count, the
+cheapest listing with a link, and a direct link to the Google Sheet.
+
+To set it up:
+
+1. Open Telegram and message [@BotFather](https://t.me/BotFather). Send `/newbot`,
+   follow the prompts, and copy the token it gives you (looks like `123456:ABC-DEF...`).
+2. Start a chat with your new bot (or add it to a group), then open:
+   ```
+   https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
+   ```
+   Send a message to the bot, refresh the URL, and find `"chat":{"id":...}` in the JSON.
+   That number is your `telegram_chat_id`.
+3. Paste both into your profile:
+   ```json
+   "telegram_bot_token": "123456:ABC-DEFghijklmnop",
+   "telegram_chat_id": "987654321"
+   ```
+
+Both fields must be set for notifications to send. Leave either empty to disable.
+
 **Field reference**
 
 | Field | Required | Description |
@@ -272,6 +309,8 @@ gate, no email is sent (no noise).
 | `email_app_password` | no | Gmail App Password (not your account password) |
 | `email_districts` | no | Comma-separated district names to restrict the digest to. Empty = all districts. |
 | `email_top_n` | no | How many listings to include in the digest (default: 10) |
+| `telegram_bot_token` | no | Telegram bot token from @BotFather |
+| `telegram_chat_id` | no | Telegram chat/user ID to send notifications to |
 | `language` | no | `en` or `pl` - controls column headers, email text, and Telegram messages (default: `en`) |
 
 #### 3. Environment variables
