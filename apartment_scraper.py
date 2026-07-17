@@ -285,16 +285,34 @@ WARSAW_BOUNDS = {
     "lon_max": 21.35
 }
 
-LUBLIN_BOUNDS = {
-    "lat_min": 51.15,
-    "lat_max": 51.35,
-    "lon_min": 22.40,
-    "lon_max": 22.70,
-}
+LUBLIN_BOUNDS    = {"lat_min": 51.15, "lat_max": 51.35, "lon_min": 22.40, "lon_max": 22.70}
+KRAKOW_BOUNDS    = {"lat_min": 49.97, "lat_max": 50.15, "lon_min": 19.79, "lon_max": 20.25}
+GDANSK_BOUNDS    = {"lat_min": 54.27, "lat_max": 54.46, "lon_min": 18.46, "lon_max": 18.78}
+WROCLAW_BOUNDS   = {"lat_min": 51.05, "lat_max": 51.22, "lon_min": 16.85, "lon_max": 17.18}
+POZNAN_BOUNDS    = {"lat_min": 52.30, "lat_max": 52.52, "lon_min": 16.79, "lon_max": 17.08}
+LODZ_BOUNDS      = {"lat_min": 51.68, "lat_max": 51.87, "lon_min": 19.33, "lon_max": 19.63}
+KATOWICE_BOUNDS  = {"lat_min": 50.19, "lat_max": 50.32, "lon_min": 18.92, "lon_max": 19.12}
+SZCZECIN_BOUNDS  = {"lat_min": 53.35, "lat_max": 53.55, "lon_min": 14.45, "lon_max": 14.70}
+BYDGOSZCZ_BOUNDS = {"lat_min": 53.08, "lat_max": 53.18, "lon_min": 17.95, "lon_max": 18.10}
+GDYNIA_BOUNDS    = {"lat_min": 54.44, "lat_max": 54.58, "lon_min": 18.45, "lon_max": 18.60}
 
 CITY_BOUNDS = {
-    "Warszawa": WARSAW_BOUNDS,
-    "Lublin": LUBLIN_BOUNDS,
+    "Warszawa":   WARSAW_BOUNDS,
+    "Lublin":     LUBLIN_BOUNDS,
+    "Kraków":     KRAKOW_BOUNDS,
+    "Krakow":     KRAKOW_BOUNDS,
+    "Gdańsk":     GDANSK_BOUNDS,
+    "Gdansk":     GDANSK_BOUNDS,
+    "Wrocław":    WROCLAW_BOUNDS,
+    "Wroclaw":    WROCLAW_BOUNDS,
+    "Poznań":     POZNAN_BOUNDS,
+    "Poznan":     POZNAN_BOUNDS,
+    "Łódź":       LODZ_BOUNDS,
+    "Lodz":       LODZ_BOUNDS,
+    "Katowice":   KATOWICE_BOUNDS,
+    "Szczecin":   SZCZECIN_BOUNDS,
+    "Bydgoszcz":  BYDGOSZCZ_BOUNDS,
+    "Gdynia":     GDYNIA_BOUNDS,
 }
 
 

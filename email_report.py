@@ -46,10 +46,6 @@ _ROOM_SHARE_RE = re.compile(r'na pokoje|na pok[oó]j\b|wynajem pokoj', re.IGNORE
 # Cyrillic block covers Russian, Ukrainian, Belarusian
 _CYRILLIC_RE = re.compile(r'[\u0400-\u04FF]')
 
-# Warsaw district / city name variants we accept
-_WARSAW_RE = re.compile(r'warszaw', re.IGNORECASE)
-
-
 # ── Filtering ─────────────────────────────────────────────────────────────────
 
 def _has_photo(row) -> bool:
@@ -88,6 +84,37 @@ def _is_whole_apartment(row) -> bool:
     if _ROOM_WORD_RE.search(name) and not _APARTMENT_WORD_RE.search(name):
         return False
     return True
+
+
+def _build_city_regex(city: str):
+    """Build a regex matching the configured city name, or None to skip city filtering.
+
+    Strips country suffix (e.g. "Warszawa, Poland" → "Warszawa") and applies the same
+    diacritic folding as _build_district_regex so "Krakow" matches "Kraków".
+    Pass an empty string or None to disable city filtering entirely.
+    """
+    if not city or not city.strip():
+        return None
+    city_name = city.strip().split(",")[0].strip()
+    if not city_name:
+        return None
+    _fold = {"ą": "[aą]", "ó": "[oó]", "ś": "[sś]", "ż": "[zżź]", "ź": "[zżź]",
+             "ł": "[lł]", "ć": "[cć]", "ń": "[nń]", "ę": "[eę]"}
+    pattern = "".join(_fold.get(ch, re.escape(ch)) for ch in city_name.lower())
+    return re.compile(pattern, re.IGNORECASE)
+
+
+def _is_in_city(row, city_re) -> bool:
+    """Return False if the listing address does not mention the configured city.
+
+    Matches against Address and Location fields. Returns True when city_re is None
+    (city filtering disabled).
+    """
+    if city_re is None:
+        return True
+    address = str(row.get("Address", "") or "")
+    location = str(row.get("Location", "") or "")
+    return bool(city_re.search(address) or city_re.search(location))
 
 
 def _build_district_regex(districts):
@@ -134,23 +161,20 @@ def _is_polish_language(row) -> bool:
     return not _CYRILLIC_RE.search(name + opis)
 
 
-def _is_warsaw(row) -> bool:
-    """Return False if the listing is outside Warsaw (e.g. Marki, Łomianki)."""
-    address = str(row.get("Address", "") or "")
-    lokalizacja = str(row.get("Location", "") or "")
-    return _WARSAW_RE.search(address) or _WARSAW_RE.search(lokalizacja)
-
-
-def filter_quality_offers(df: pd.DataFrame, district_re=None) -> pd.DataFrame:
+def filter_quality_offers(df: pd.DataFrame, district_re=None, city_re=None) -> pd.DataFrame:
     """Return rows that pass all quality checks.
 
-    If `district_re` is a compiled regex, listings outside those districts are dropped.
+    city_re     -- compiled regex from _build_city_regex(); drops listings whose
+                   Address/Location don't mention the configured city. Pass None to
+                   skip city filtering (e.g. when city is unset in the profile).
+    district_re -- compiled regex from _build_district_regex(); further narrows to
+                   specific districts within the city. Pass None to include all.
     """
     if df.empty:
         return df
 
     results = []
-    counts = {"room_only": 0, "cyrillic": 0, "outside_warsaw": 0, "no_photo": 0,
+    counts = {"room_only": 0, "cyrillic": 0, "outside_city": 0, "no_photo": 0,
               "no_desc": 0, "no_area_price": 0, "wrong_district": 0}
 
     for _, row in df.iterrows():
@@ -164,15 +188,15 @@ def filter_quality_offers(df: pd.DataFrame, district_re=None) -> pd.DataFrame:
             counts["room_only"] += 1; continue
         if not _is_polish_language(row):
             counts["cyrillic"] += 1; continue
-        if not _is_warsaw(row):
-            counts["outside_warsaw"] += 1; continue
+        if not _is_in_city(row, city_re):
+            counts["outside_city"] += 1; continue
         if not _is_in_districts(row, district_re):
             counts["wrong_district"] += 1; continue
         results.append(row)
 
     logger.info(
         f"📧 Filtered out: {counts['room_only']} rooms, {counts['cyrillic']} Cyrillic, "
-        f"{counts['outside_warsaw']} outside Warsaw, {counts['wrong_district']} wrong district, "
+        f"{counts['outside_city']} outside city, {counts['wrong_district']} wrong district, "
         f"{counts['no_photo']} no photo, {counts['no_desc']} no desc, "
         f"{counts['no_area_price']} no area/price"
     )
@@ -390,6 +414,7 @@ def send_email_report(
     smtp_host = config.get("email_smtp_host", "smtp.gmail.com").strip() or "smtp.gmail.com"
     smtp_port = int(config.get("email_smtp_port", 587) or 587)
 
+    city_re     = _build_city_regex(config.get("city", ""))
     district_re = _build_district_regex(config.get("email_districts", ""))
 
     try:
@@ -399,7 +424,7 @@ def send_email_report(
 
     logger.info("📧 Preparing email report...")
 
-    quality = filter_quality_offers(offers_df, district_re)
+    quality = filter_quality_offers(offers_df, district_re, city_re)
     logger.info(f"📧 Quality filter: {len(quality)}/{len(offers_df)} offers passed")
 
     if quality.empty:
