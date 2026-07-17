@@ -1,0 +1,18 @@
+{
+  "profiles": [
+    {
+      "name": "ursynow",
+      "olx_url": "https://www.olx.pl/nieruchomosci/mieszkania/wynajem/warszawa/?search%5Bdistrict_id%5D=373",
+      "otodom_url": "https://www.otodom.pl/pl/wyniki/wynajem/mieszkanie/wiele-lokalizacji?locations=%5Bmazowieckie%2Fwarszawa%2Fwarszawa%2Fwarszawa%2Fursynow%5D",
+      "sheet_id": "YOUR_GOOGLE_SHEET_ID",
+      "origin_address": "Plac Defilad 1, 00-901 Warszawa, Poland",
+      "city": "Warszawa",
+      "email_sender": "you@example.com",
+      "email_recipient": "you@example.com",
+      "email_app_password": "",
+      "email_districts": "Ursynów",
+      "email_top_n": 15,
+      "language": "en"
+    }
+  ]
+}
