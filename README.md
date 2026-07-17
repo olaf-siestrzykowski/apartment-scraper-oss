@@ -102,17 +102,109 @@ settings:
 cp profiles.example.json profiles.json
 ```
 
-Each profile needs:
+**How search URLs work**
 
-| Field | Description |
-|---|---|
-| `name` | Profile identifier, used with `--search` |
-| `olx_url` / `otodom_url` | A saved search URL from either site (filters, location, price/area range) |
-| `sheet_id` | Target Google Sheet ID (the long ID in the sheet's URL) |
-| `origin_address` | Address used for commute distance calculation |
-| `city` | City name, used for address parsing |
-| `email_sender` / `email_recipient` / `email_app_password` | Optional, for the digest email (Gmail App Password, not your account password) |
-| `language` | `en` or `pl` - language for Sheet column headers, the email digest and Telegram messages (default `en`). Can also be set from the sheet's `config` tab. |
+Filters (price, area, rooms, district) are not set in `profiles.json` — they live inside
+the search URL itself. Go to OLX or Otodom, apply all the filters you want in the UI,
+then copy the URL from the address bar and paste it into `olx_url` / `otodom_url`. The
+scraper will paginate through all results that URL returns.
+
+**Minimal working profile**
+
+```json
+{
+  "profiles": [
+    {
+      "name": "mokotow",
+      "olx_url": "https://www.olx.pl/nieruchomosci/mieszkania/wynajem/warszawa/?search%5Bdistrict_id%5D=300&search%5Bfilter_float_price%3Ato%5D=4500&search%5Bfilter_float_m%3Afrom%5D=40",
+      "otodom_url": "https://www.otodom.pl/pl/wyniki/wynajem/mieszkanie/wiele-lokalizacji?locations=%5Bmazowieckie%2Fwarszawa%2Fwarszawa%2Fwarszawa%2Fmokotow%5D&priceMax=4500&areaMin=40",
+      "sheet_id": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
+      "origin_address": "Rondo ONZ 1, 00-124 Warszawa, Poland",
+      "city": "Warszawa",
+      "email_sender": "",
+      "email_recipient": "",
+      "email_app_password": "",
+      "email_districts": "Mokotów",
+      "email_top_n": 10,
+      "language": "en"
+    }
+  ]
+}
+```
+
+**Finding your Sheet ID**
+
+Open the sheet in your browser. The ID is the long string between `/d/` and `/edit` in
+the URL:
+
+```
+https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms/edit
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+**Multiple profiles**
+
+Add as many profiles to the `profiles` array as you need — one per search area, price
+band, or city. Each profile syncs to its own sheet and sends its own email digest.
+
+```json
+{
+  "profiles": [
+    {
+      "name": "mokotow",
+      "olx_url": "https://www.olx.pl/...",
+      "otodom_url": "https://www.otodom.pl/...",
+      "sheet_id": "SHEET_ID_A",
+      "origin_address": "Rondo ONZ 1, 00-124 Warszawa, Poland",
+      "city": "Warszawa",
+      "email_sender": "you@gmail.com",
+      "email_recipient": "you@gmail.com",
+      "email_app_password": "abcd efgh ijkl mnop",
+      "email_districts": "Mokotów",
+      "email_top_n": 10,
+      "language": "en"
+    },
+    {
+      "name": "zoliborz",
+      "olx_url": "https://www.olx.pl/...",
+      "otodom_url": "https://www.otodom.pl/...",
+      "sheet_id": "SHEET_ID_B",
+      "origin_address": "Rondo ONZ 1, 00-124 Warszawa, Poland",
+      "city": "Warszawa",
+      "email_sender": "you@gmail.com",
+      "email_recipient": "you@gmail.com",
+      "email_app_password": "abcd efgh ijkl mnop",
+      "email_districts": "Żoliborz",
+      "email_top_n": 10,
+      "language": "pl"
+    }
+  ]
+}
+```
+
+Run a specific profile:
+
+```bash
+python apartment_scraper.py --search mokotow
+python apartment_scraper.py --search zoliborz
+```
+
+**Field reference**
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | Profile identifier — used with `--search` |
+| `olx_url` | yes | OLX search URL with your filters applied |
+| `otodom_url` | yes | Otodom search URL with your filters applied |
+| `sheet_id` | yes | Google Sheet ID (from the sheet's URL) |
+| `origin_address` | yes | Full address used for commute time calculation |
+| `city` | yes | City name, used for address parsing |
+| `email_sender` | no | Gmail address to send the digest from |
+| `email_recipient` | no | Address to receive the digest |
+| `email_app_password` | no | [Gmail App Password](https://myaccount.google.com/apppasswords) — not your account password |
+| `email_districts` | no | District name shown in the email subject line |
+| `email_top_n` | no | How many listings to include in the digest (default: 15) |
+| `language` | no | `en` or `pl` — controls column headers, email text, and Telegram messages (default: `en`) |
 
 #### 3. Environment variables
 
