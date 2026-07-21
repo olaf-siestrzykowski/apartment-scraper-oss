@@ -589,7 +589,7 @@ def _open_spreadsheet(sheet_id: str):
     """Open a gspread spreadsheet using the service account credentials."""
     json_creds = GOOGLE_CREDS_PATH
     if not Path(json_creds).exists():
-        sys.exit(
+        raise RuntimeError(
             f"Google credentials not found: {json_creds}\n"
             f"Set GOOGLE_CREDS_PATH or run 'python setup.py' to get set up."
         )
@@ -874,6 +874,34 @@ def read_existing_status_map(worksheet) -> dict:
         return {}
 
 
+def read_existing_llm_scores_map(worksheet) -> dict:
+    """Read Link → {"score", "summary"} from the current sheet for LLM score caching."""
+    try:
+        data = worksheet.get_all_values()
+        if not data or len(data) < 2:
+            return {}
+        header = data[0]
+        try:
+            link_col = header.index("Link")
+            score_col = header.index("LLM_Score")
+            summary_col = header.index("LLM_Summary")
+        except ValueError:
+            return {}
+        result = {}
+        for row in data[1:]:
+            max_col = max(link_col, score_col, summary_col)
+            if len(row) > max_col:
+                link = row[link_col].strip()
+                score = row[score_col].strip()
+                summary = row[summary_col].strip() if len(row) > summary_col else ""
+                if link and score and score not in ("", "nan"):
+                    result[link] = {"score": score, "summary": summary}
+        return result
+    except Exception as e:
+        logger.debug(f"Could not read existing LLM scores: {e}")
+        return {}
+
+
 def restore_status_column(worksheet, status_map: dict) -> None:
     """After uploading new data restore non-'New' statuses matched by Link."""
     if not status_map:
@@ -1044,7 +1072,7 @@ def reorder_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
     Returns a new DataFrame with reordered columns.
     """
     priority_columns = [
-        'Status',
+        'Status', 'LLM_Score', 'LLM_Summary',
         'Name', 'Base_value', 'Additional_value', 'Full_value',
         'Area', 'Address', 'Distance_km', 'Duration_min', 'Link',
         'Image_URL', 'Price_Detail', 'Area_Detail', 'Location', 'Description',
@@ -1065,7 +1093,8 @@ def reorder_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
 # Internal code always keeps using the English keys below - this only changes
 # what a "pl" profile sees as column headers in Google Sheets.
 COLUMN_HEADERS_PL = {
-    "Status": "Status", "Name": "Nazwa", "Base_value": "Cena bazowa",
+    "Status": "Status", "LLM_Score": "Ocena AI", "LLM_Summary": "Podsumowanie AI",
+    "Name": "Nazwa", "Base_value": "Cena bazowa",
     "Additional_value": "Opłaty dodatkowe", "Full_value": "Cena całkowita",
     "Area": "Powierzchnia", "Address": "Adres", "Distance_km": "Odległość (km)",
     "Duration_min": "Czas dojazdu (min)", "Link": "Link", "Image_URL": "Zdjęcie",
@@ -4616,8 +4645,9 @@ def run(playwright: Playwright) -> None:
 
     _run_config["_spreadsheet"] = _spreadsheet  # stash for later use
 
-    # Merge email fields from profiles.json (used when config sheet fields are blank)
-    for _email_key in ("email_sender", "email_recipient", "email_app_password", "email_districts", "email_top_n"):
+    # Merge email + LLM fields from profiles.json (used when config sheet fields are blank)
+    for _email_key in ("email_sender", "email_recipient", "email_app_password", "email_districts", "email_top_n",
+                       "llm_preferences", "groq_model"):
         if not _run_config.get(_email_key):
             _run_config[_email_key] = _profile.get(_email_key, "")
 
@@ -5574,6 +5604,30 @@ if __name__ == "__main__":
     # Merge portal-specific columns and reorder before saving
     offers_df = merge_portal_columns(offers_df)
     offers_df = reorder_dataframe_columns(offers_df)
+
+    # LLM scoring - score listings against user preferences
+    llm_prefs = _run_config.get("llm_preferences", "")
+    _has_llm_backend = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY")
+    if llm_prefs and _has_llm_backend:
+        logger.info("="*60)
+        logger.info("🤖 LLM SCORING LISTINGS")
+        logger.info("="*60)
+        from llm_scorer import score_listings_df
+        cached_llm = {}
+        try:
+            json_creds = GOOGLE_CREDS_PATH
+            scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+            _creds = ServiceAccountCredentials.from_json_keyfile_name(str(json_creds), scope)
+            _client = gspread.authorize(_creds)
+            _ws_cache = _client.open_by_key(sheet_id).worksheet('apartment list')
+            cached_llm = read_existing_llm_scores_map(_ws_cache)
+            logger.info(f"🤖 Loaded {len(cached_llm)} cached LLM scores from Sheets")
+        except Exception as _llm_cache_err:
+            logger.debug(f"Could not load LLM score cache from Sheets: {_llm_cache_err}")
+        offers_df = score_listings_df(
+            offers_df, llm_prefs, cached_llm,
+            groq_model=_run_config.get("groq_model"),
+        )
 
     # Ensure Status column exists
     if "Status" not in offers_df.columns:

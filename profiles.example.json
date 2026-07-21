@@ -12,7 +12,24 @@
       "email_app_password": "",
       "email_districts": "Ursynów",
       "email_top_n": 15,
-      "language": "en"
+      "language": "en",
+      "llm_preferences": "Bright apartment, modern kitchen with dishwasher, close to metro, max 30 min commute, balcony a plus, no ground floor, quiet street"
+    },
+    {
+      "name": "gdansk",
+      "olx_url": "https://www.olx.pl/nieruchomosci/mieszkania/wynajem/gdansk/?search%5Bfilter_float_price%3Ato%5D=3500&search%5Bfilter_enum_rooms%5D%5B0%5D=one&search%5Bfilter_enum_rooms%5D%5B1%5D=two&search%5Bfilter_enum_rooms%5D%5B2%5D=three",
+      "otodom_url": "https://www.otodom.pl/pl/wyniki/wynajem/mieszkanie/pomorskie/gdansk?priceMax=3500&roomsNumber=%5BONE%2CTWO%2CTHREE%5D",
+      "sheet_id": "YOUR_GOOGLE_SHEET_ID",
+      "origin_address": "Długi Targ 28, 80-828 Gdańsk, Poland",
+      "city": "Gdańsk",
+      "email_sender": "you@example.com",
+      "email_recipient": "you@example.com",
+      "email_app_password": "",
+      "email_districts": "",
+      "email_top_n": 15,
+      "language": "pl",
+      "llm_preferences": "Jasne mieszkanie 1-3 pokoje, do 3500 PLN, dobry stan lub po remoncie, blisko komunikacji miejskiej (tramwaj/SKM), nie parter, cicha ulica, wyposażona kuchnia, zmywarka mile widziana, balkon lub ogródek to plus",
+      "groq_model": "llama-3.1-8b-instant"
     }
   ]
 }
