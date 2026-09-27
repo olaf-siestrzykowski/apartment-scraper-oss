@@ -970,3 +970,29 @@ class TestAddTotalCosts:
         ms.add_total_costs(df)
         assert list(df["Additional_value"]) == [0.0, 0.0]
         assert list(df["Full_value"]) == [2500.0, 0.0]
+
+
+# =============================================================================
+# TEST read_existing_llm_scores_map
+# =============================================================================
+
+class TestReadExistingLlmScoresMap:
+    class FakeWorksheet:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def get_all_values(self):
+            return self.rows
+
+    def test_reads_polish_headers(self):
+        # "pl" profiles write translated headers - the cache used to come back empty for them
+        header = ms.translate_header_row(["Link", "LLM_Score", "LLM_Summary", "LLM_Description", "LLM_Fees"], "pl")
+        ws = self.FakeWorksheet([header, ["https://x", "8", "fajne", "opis", "w cenie"]])
+        cache = ms.read_existing_llm_scores_map(ws)
+        assert cache["https://x"]["score"] == "8"
+        assert cache["https://x"]["fees"] == "w cenie"
+        assert cache["https://x"]["admin_fee"] == ""
+
+    def test_sheet_without_llm_columns(self):
+        ws = self.FakeWorksheet([["Link", "Name"], ["https://x", "flat"]])
+        assert ms.read_existing_llm_scores_map(ws) == {}

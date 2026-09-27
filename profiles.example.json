@@ -29,7 +29,7 @@
       "email_top_n": 15,
       "language": "pl",
       "llm_preferences": "Jasne mieszkanie 1-3 pokoje, do 3500 PLN, dobry stan lub po remoncie, blisko komunikacji miejskiej (tramwaj/SKM), nie parter, cicha ulica, wyposażona kuchnia, zmywarka mile widziana, balkon lub ogródek to plus",
-      "groq_model": "llama-3.1-8b-instant"
+      "groq_model": "openai/gpt-oss-20b"
     }
   ]
 }

@@ -857,12 +857,13 @@ def read_existing_status_map(worksheet) -> dict:
 
 
 def read_existing_llm_scores_map(worksheet) -> dict:
-    """Read Link → {"score", "summary"} from the current sheet for LLM score caching."""
+    """Read Link → {"score", "summary", "description", "fees", "admin_fee"} from the sheet for LLM caching."""
     try:
         data = worksheet.get_all_values()
         if not data or len(data) < 2:
             return {}
-        header = data[0]
+        # "pl" profiles write translated headers ("Ocena AI") - map them back
+        header = untranslate_header_row(data[0])
         try:
             link_col = header.index("Link")
             score_col = header.index("LLM_Score")
@@ -870,6 +871,11 @@ def read_existing_llm_scores_map(worksheet) -> dict:
         except ValueError:
             return {}
         desc_col = header.index("LLM_Description") if "LLM_Description" in header else None
+        fees_col = header.index("LLM_Fees") if "LLM_Fees" in header else None
+        admin_fee_col = header.index("LLM_Admin_Fee") if "LLM_Admin_Fee" in header else None
+
+        def _cell(row, col):
+            return row[col].strip() if col is not None and len(row) > col else ""
         result = {}
         for row in data[1:]:
             max_col = max(link_col, score_col, summary_col)
@@ -877,9 +883,14 @@ def read_existing_llm_scores_map(worksheet) -> dict:
                 link = row[link_col].strip()
                 score = row[score_col].strip()
                 summary = row[summary_col].strip() if len(row) > summary_col else ""
-                description = row[desc_col].strip() if desc_col is not None and len(row) > desc_col else ""
                 if link and score and score not in ("", "nan"):
-                    result[link] = {"score": score, "summary": summary, "description": description}
+                    result[link] = {
+                        "score": score,
+                        "summary": summary,
+                        "description": _cell(row, desc_col),
+                        "fees": _cell(row, fees_col),
+                        "admin_fee": _cell(row, admin_fee_col),
+                    }
         return result
     except Exception as e:
         logger.debug(f"Could not read existing LLM scores: {e}")
@@ -1057,7 +1068,7 @@ def reorder_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     priority_columns = [
         'Status', 'LLM_Score', 'LLM_Summary', 'LLM_Description',
-        'Name', 'Base_value', 'Additional_value', 'Full_value',
+        'Name', 'Base_value', 'Additional_value', 'Full_value', 'LLM_Fees', 'LLM_Admin_Fee',
         'Area', 'Address', 'Distance_km', 'Duration_min', 'Link',
         'Image_URL', 'Price_Detail', 'Area_Detail', 'Location', 'Description',
         'Seller_Info', 'Dishwasher', 'Geocoded_Address',
@@ -1078,6 +1089,7 @@ def reorder_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
 # what a "pl" profile sees as column headers in Google Sheets.
 COLUMN_HEADERS_PL = {
     "Status": "Status", "LLM_Score": "Ocena AI", "LLM_Summary": "Podsumowanie AI", "LLM_Description": "Opis AI",
+    "LLM_Fees": "Opłaty (AI)", "LLM_Admin_Fee": "Czynsz adm. (AI)",
     "Name": "Nazwa", "Base_value": "Cena bazowa",
     "Additional_value": "Opłaty dodatkowe", "Full_value": "Cena całkowita",
     "Area": "Powierzchnia", "Address": "Adres", "Distance_km": "Odległość (km)",
@@ -1117,6 +1129,16 @@ def translate_header_row(columns: list, language: str = "en") -> list:
     if language != "pl":
         return list(columns)
     return [COLUMN_HEADERS_PL.get(col, col) for col in columns]
+
+
+_COLUMN_HEADERS_FROM_PL = {pl: en for en, pl in COLUMN_HEADERS_PL.items()}
+
+
+def untranslate_header_row(columns: list) -> list:
+    """Inverse of translate_header_row: map displayed (possibly Polish) headers back
+    to our internal English column names. Two display labels are shared by two
+    columns each ("Zdjęcie", "Sprzedający"); callers only look up unambiguous ones."""
+    return [_COLUMN_HEADERS_FROM_PL.get(col, col) for col in columns]
 
 
 OTODOM_LISTING_SELECTORS = {
@@ -4726,6 +4748,7 @@ if __name__ == "__main__":
         offers_df = score_listings_df(
             offers_df, llm_prefs, cached_llm,
             groq_model=_run_config.get("groq_model"),
+            language=_run_config.get("language", "en"),
         )
 
     # Ensure Status column exists
