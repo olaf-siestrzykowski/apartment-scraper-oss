@@ -857,18 +857,25 @@ def read_existing_status_map(worksheet) -> dict:
 
 
 def read_existing_llm_scores_map(worksheet) -> dict:
-    """Read Link → {"score", "summary"} from the current sheet for LLM score caching."""
+    """Read Link → {"score", "summary", "description", "fees", "admin_fee"} from the sheet for LLM caching."""
     try:
         data = worksheet.get_all_values()
         if not data or len(data) < 2:
             return {}
-        header = data[0]
+        # "pl" profiles write translated headers ("Ocena AI") - map them back
+        header = untranslate_header_row(data[0])
         try:
             link_col = header.index("Link")
             score_col = header.index("LLM_Score")
             summary_col = header.index("LLM_Summary")
         except ValueError:
             return {}
+        desc_col = header.index("LLM_Description") if "LLM_Description" in header else None
+        fees_col = header.index("LLM_Fees") if "LLM_Fees" in header else None
+        admin_fee_col = header.index("LLM_Admin_Fee") if "LLM_Admin_Fee" in header else None
+
+        def _cell(row, col):
+            return row[col].strip() if col is not None and len(row) > col else ""
         result = {}
         for row in data[1:]:
             max_col = max(link_col, score_col, summary_col)
@@ -877,7 +884,13 @@ def read_existing_llm_scores_map(worksheet) -> dict:
                 score = row[score_col].strip()
                 summary = row[summary_col].strip() if len(row) > summary_col else ""
                 if link and score and score not in ("", "nan"):
-                    result[link] = {"score": score, "summary": summary}
+                    result[link] = {
+                        "score": score,
+                        "summary": summary,
+                        "description": _cell(row, desc_col),
+                        "fees": _cell(row, fees_col),
+                        "admin_fee": _cell(row, admin_fee_col),
+                    }
         return result
     except Exception as e:
         logger.debug(f"Could not read existing LLM scores: {e}")
@@ -1054,8 +1067,8 @@ def reorder_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
     Returns a new DataFrame with reordered columns.
     """
     priority_columns = [
-        'Status', 'LLM_Score', 'LLM_Summary',
-        'Name', 'Base_value', 'Additional_value', 'Full_value',
+        'Status', 'LLM_Score', 'LLM_Summary', 'LLM_Description',
+        'Name', 'Base_value', 'Additional_value', 'Full_value', 'LLM_Fees', 'LLM_Admin_Fee',
         'Area', 'Address', 'Distance_km', 'Duration_min', 'Link',
         'Image_URL', 'Price_Detail', 'Area_Detail', 'Location', 'Description',
         'Seller_Info', 'Dishwasher', 'Geocoded_Address',
@@ -1075,7 +1088,8 @@ def reorder_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
 # Internal code always keeps using the English keys below - this only changes
 # what a "pl" profile sees as column headers in Google Sheets.
 COLUMN_HEADERS_PL = {
-    "Status": "Status", "LLM_Score": "Ocena AI", "LLM_Summary": "Podsumowanie AI",
+    "Status": "Status", "LLM_Score": "Ocena AI", "LLM_Summary": "Podsumowanie AI", "LLM_Description": "Opis AI",
+    "LLM_Fees": "Opłaty (AI)", "LLM_Admin_Fee": "Czynsz adm. (AI)",
     "Name": "Nazwa", "Base_value": "Cena bazowa",
     "Additional_value": "Opłaty dodatkowe", "Full_value": "Cena całkowita",
     "Area": "Powierzchnia", "Address": "Adres", "Distance_km": "Odległość (km)",
@@ -1115,6 +1129,16 @@ def translate_header_row(columns: list, language: str = "en") -> list:
     if language != "pl":
         return list(columns)
     return [COLUMN_HEADERS_PL.get(col, col) for col in columns]
+
+
+_COLUMN_HEADERS_FROM_PL = {pl: en for en, pl in COLUMN_HEADERS_PL.items()}
+
+
+def untranslate_header_row(columns: list) -> list:
+    """Inverse of translate_header_row: map displayed (possibly Polish) headers back
+    to our internal English column names. Two display labels are shared by two
+    columns each ("Zdjęcie", "Sprzedający"); callers only look up unambiguous ones."""
+    return [_COLUMN_HEADERS_FROM_PL.get(col, col) for col in columns]
 
 
 OTODOM_LISTING_SELECTORS = {
@@ -1288,98 +1312,6 @@ OTODOM_DETAIL_SELECTORS = {
         'span:contains("nieruchomości")',
     ]
 }
-
-
-def _iter_cost_matches(patterns, text):
-    """Yield (label, match) for each pattern match, skipping matches whose span
-    overlaps text already claimed by an earlier pattern - overlapping patterns
-    (e.g. 'media ...' and 'opłaty za media ...') would otherwise count the same
-    amount twice."""
-    claimed = []
-    for pattern, label in patterns:
-        for m in re.finditer(pattern, text):
-            start, end = m.span()
-            if any(start < c_end and c_start < end for c_start, c_end in claimed):
-                continue
-            claimed.append((start, end))
-            yield label, m
-
-
-def extract_full_cost_from_description(description: str, base_price: float) -> Dict[str, Any]:
-    """
-    Extract full cost information from Polish apartment descriptions using regex patterns.
-    Returns dictionary with additional costs found.
-    """
-    if not description:
-        return {"additional_costs": 0, "full_cost": base_price, "cost_details": []}
-
-    desc_lower = description.lower()
-    additional_costs = 0
-    cost_details = []
-
-    # Common Polish rental cost patterns (regex matches real Polish listing text; the
-    # second tuple element is our own output label and is safe to keep in English).
-    # Bare "czynsz <n>" is the base rent, so the admin pattern requires the qualifier.
-    cost_patterns = [
-        # Czynsz administracyjny / administrative rent
-        (r'czynsz\s+admin(?:istracyjny)?:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Administrative rent'),
-        (r'administracyjn\w*:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Administrative rent'),
-
-        # Media / utilities
-        (r'media:?\s*(?:około|ok\.?)?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Utilities'),
-        (r'opłaty za media:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Utilities'),
-        (r'koszty mediów:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Utilities'),
-
-        # Heating / ogrzewanie
-        (r'ogrzewanie:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Heating'),
-        (r'c\.o\.?:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Central heating'),
-
-        # Hot water / ciepła woda
-        (r'(?:ciepła woda|c\.w\.):?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Hot water'),
-
-        # Parking
-        (r'(?:miejsce parkingowe|parking|garaż):?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Parking'),
-
-        # Internet
-        (r'internet:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Internet'),
-
-        # General additional costs
-        (r'dodatkowo:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Additional fees'),
-        (r'plus:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Additional fees'),
-
-        # Total cost patterns
-        (r'razem(?:\s+z\s+opłatami)?:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Total cost'),
-        (r'łącznie:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)', 'Total cost'),
-    ]
-
-    total_cost_found = None
-
-    for cost_type, m in _iter_cost_matches(cost_patterns, desc_lower):
-        try:
-            cost = float(m.group(1).replace(',', '.'))
-        except ValueError:
-            continue
-
-        if cost_type == 'Total cost':
-            total_cost_found = cost
-        else:
-            additional_costs += cost
-            cost_details.append(f"{cost_type}: {cost} zł")
-
-    # If total cost is explicitly mentioned and higher than base + additional, use it
-    if total_cost_found and total_cost_found > base_price:
-        full_cost = total_cost_found
-        if not cost_details:  # If no breakdown found, calculate additional
-            additional_costs = total_cost_found - base_price
-            cost_details.append(f"Additional costs: {additional_costs} zł")
-    else:
-        full_cost = base_price + additional_costs
-
-    return {
-        "additional_costs": additional_costs,
-        "full_cost": full_cost,
-        "cost_details": cost_details
-    }
 
 
 # ============================================================================
@@ -4816,6 +4748,7 @@ if __name__ == "__main__":
         offers_df = score_listings_df(
             offers_df, llm_prefs, cached_llm,
             groq_model=_run_config.get("groq_model"),
+            language=_run_config.get("language", "en"),
         )
 
     # Ensure Status column exists

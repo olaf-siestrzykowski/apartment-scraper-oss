@@ -19,14 +19,16 @@ flowchart LR
     A[🔍 OLX & Otodom<br/>search pages] -->|Playwright + BeautifulSoup| B[🏠 Listing scrape]
     B --> C[📄 Detail extraction<br/>price, area, seller info]
     C --> D[📍 Commute distance<br/>Nominatim + OpenRouteService]
-    D --> E[📊 Google Sheets sync]
-    D --> F[📧 Email digest<br/>top-N by price/m²]
-    D --> G[💬 Telegram alert]
+    D --> L[🤖 Optional LLM pass<br/>match score, description, fees]
+    L --> E[📊 Google Sheets sync]
+    L --> F[📧 Email digest<br/>top-N by price/m² or AI score]
+    L --> G[💬 Telegram alert]
 
     style A fill:#4285F4,color:#fff
     style B fill:#34A853,color:#fff
     style C fill:#34A853,color:#fff
     style D fill:#FBBC05,color:#000
+    style L fill:#8B5CF6,color:#fff
     style E fill:#EA4335,color:#fff
     style F fill:#EA4335,color:#fff
     style G fill:#EA4335,color:#fff
@@ -45,6 +47,10 @@ on-demand by default; recurring runs are up to you (cron, systemd, or `scheduler
 - **Automated delivery pipeline** - Google Sheets API sync, HTML email digests, and
   Telegram notifications; a bundled scheduler reads per-profile timing from each sheet's
   config tab (you host/run it - no managed infra included)
+- **LLM-powered ranking** - optional Anthropic or Groq backend scores each listing
+  1-10 against natural-language preferences, generates a clean AI description for the
+  email digest, and reads the monthly fees out of the free-text description (see
+  [Fee extraction](#fee-extraction)); falls back gracefully when no API key is set
 - **Production-minded engineering** - structured logging with debug HTML snapshots,
   configurable timeout profiles, dedup logic, and a pytest suite covering the parsing
   and filtering logic
@@ -63,7 +69,11 @@ on-demand by default; recurring runs are up to you (cron, systemd, or `scheduler
 - Multiple named search profiles (price/area/room filters), each synced to its own
   Google Sheet
 - Commute distance/duration to a fixed origin address via OpenRouteService
-- Email digest of the best new listings (ranked by price per m²)
+- Email digest of the best new listings (ranked by price per m² or AI match score)
+- Optional LLM scoring via Anthropic or Groq: rates each listing 1-10 against
+  user-defined preferences, generates a concise AI description for the email digest, and
+  extracts fees from the description into `LLM_Fees` / `LLM_Admin_Fee`; set
+  `ANTHROPIC_API_KEY` or `GROQ_API_KEY` (free at console.groq.com) to enable
 - Optional scheduler (`scheduler.py`) for running searches on a recurring basis - you
   keep it running via cron/systemd/similar
 - Re-extraction from previously saved HTML without re-scraping
@@ -371,6 +381,47 @@ pytest tests/ -v
    the OpenRouteService distance matrix API against your origin address.
 4. **Google Sheets sync** - results are written to the "apartment list" worksheet of
    the profile's configured sheet.
+
+### Fee extraction
+
+The advertised rent on OLX/Otodom rarely is the full monthly cost. The listing form has
+an optional "czynsz (dodatkowo)" field, but landlords often leave it empty and put the
+administrative fee, a utilities estimate or a paid parking spot in the description
+instead. The same LLM call that scores a listing also returns:
+
+| Column | Example | Meaning |
+|---|---|---|
+| `LLM_Fees` (`Opłaty (AI)`) | `+716 zł adm.; media ok. 300 zł; opcjonalnie: parking 150 zł` | Readable summary, also shown in the email digest |
+| `LLM_Admin_Fee` (`Czynsz adm. (AI)`) | `716` | Administrative fee paid on top of the rent, as a number |
+
+Status is one of *extra* (fee on top of the rent), *included* (the description says the
+rent covers it) or *unknown*. Optional extras such as parking are listed separately and
+never added to the administrative fee, and `Full_value` is not changed - the columns
+sit next to it so you can see where the scraped total is incomplete.
+
+**Why an LLM and not regexes:** an earlier regex extractor was tested on 6,248 real
+listings before being removed. It would have filled a missing fee for only 0.8% of
+them, and it counted optional parking (priced in 11% of descriptions) and utility
+estimates as fixed fees.
+
+**Measured quality:** `scripts/eval_fee_extraction.py` runs the real prompt on a
+stratified sample of your own scraped listings and compares the result with the form
+field. Results for `openai/gpt-oss-20b` (the default Groq model) on 80 listings drawn
+from 6,260 scraped ones, every disagreement reviewed by hand:
+
+| Group | Result |
+|---|---|
+| Form has a fee value (20) | Same amount in 14; 3 more match the description rather than the form (e.g. "ok. 640-800 zł" → 720); 1 description never mentions the fee; 2 errors |
+| Form fee empty (19) | Amount found in 6 (32%), status (extra / included) determined in 12 (63%) - the regex version found an amount for 6% of such listings |
+| Description says fees are included (16) | Correct in 15 - in 4 of them the "w cenie" was about internet or parking and the model correctly reported the admin fee on top |
+| Priced parking in description (18) | Kept out of the administrative fee in 17, listed as an optional extra in 16 |
+
+The two errors in the first group led to prompt and input fixes: one fee sat right at
+the old 2,000-character cut-off (the description limit is now 3,000 - no fee mention
+in the sample starts later), the other was an ambiguous "c.o. i c.w. w cenie do
+wysokości zaliczki". `openai/gpt-oss-120b` was not better on the same sample: it missed
+an explicit "czynsz administracyjny: wliczony w wynajem". Groq sometimes returns short
+503s under load; the client retries them.
 
 ### Troubleshooting
 

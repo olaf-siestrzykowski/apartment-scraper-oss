@@ -286,3 +286,16 @@ class TestSendEmailReport:
         df = pd.DataFrame([make_offer()])
         result = er.send_email_report(df, self._config(), "studio", "sheet123", "2026-07-16")
         assert result is False
+
+
+class TestFeesLine:
+    def test_fees_shown_and_escaped(self):
+        df = pd.DataFrame([make_offer(LLM_Fees="+716 zł adm.; <b>parking</b>")])
+        html_pl = er.generate_email_html(df, "studio", "", "2026-07-16", language="pl")
+        assert "Opłaty (AI):" in html_pl
+        assert "+716 zł adm." in html_pl
+        assert "<b>parking</b>" not in html_pl  # listing-derived text is escaped
+
+    def test_no_fees_no_line(self):
+        df = pd.DataFrame([make_offer()])
+        assert "Fees (AI)" not in er.generate_email_html(df, "studio", "", "2026-07-16")

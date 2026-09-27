@@ -500,100 +500,6 @@ class TestIsDuplicateOffer:
 
 
 # =============================================================================
-# TEST extract_full_cost_from_description
-# =============================================================================
-
-class TestExtractFullCostFromDescription:
-    """Test suite for extract_full_cost_from_description function"""
-
-    def test_extract_no_description_returns_defaults(self):
-        """Test that empty description returns base values"""
-        result = ms.extract_full_cost_from_description("", 2000)
-        assert result["additional_costs"] == 0
-        assert result["full_cost"] == 2000
-        assert result["cost_details"] == []
-
-    def test_extract_none_description_returns_defaults(self):
-        """Test that None description returns base values"""
-        result = ms.extract_full_cost_from_description(None, 2000)
-        assert result["additional_costs"] == 0
-        assert result["full_cost"] == 2000
-        assert result["cost_details"] == []
-
-    def test_extract_czynsz_administracyjny(self):
-        """Test extraction of administrative rent"""
-        desc = "Miesięczny czynsz to 2000 zł. Dodatkowo czynsz administracyjny: 300 zł"
-        result = ms.extract_full_cost_from_description(desc, 2000)
-        assert result["additional_costs"] == 300
-        assert result["full_cost"] == 2300
-        assert any("Administrative rent" in detail for detail in result["cost_details"])
-
-    def test_extract_media(self):
-        """Test extraction of utilities (media)"""
-        desc = "Czynsz 2000 zł + media 200 zł"
-        result = ms.extract_full_cost_from_description(desc, 2000)
-        assert result["additional_costs"] == 200
-        assert result["full_cost"] == 2200
-
-    def test_extract_multiple_costs(self):
-        """Test extraction of multiple cost types"""
-        desc = "Czynsz 2000 zł + czynsz administracyjny 300 zł + media 150 zł + parking 100 zł"
-        result = ms.extract_full_cost_from_description(desc, 2000)
-        assert result["additional_costs"] == 550  # 300 + 150 + 100
-        assert result["full_cost"] == 2550
-        assert len(result["cost_details"]) == 3
-
-    def test_extract_total_cost_mentioned(self):
-        """Test when total cost is explicitly mentioned"""
-        desc = "Czynsz 2000 zł. Razem z opłatami: 2500 zł"
-        result = ms.extract_full_cost_from_description(desc, 2000)
-        assert result["full_cost"] == 2500
-
-    def test_extract_lacznie_total(self):
-        """Test 'łącznie' keyword for total cost"""
-        desc = "Miesięczny koszt łącznie: 2800 zł"
-        result = ms.extract_full_cost_from_description(desc, 2000)
-        assert result["full_cost"] == 2800
-
-    def test_extract_heating_co(self):
-        """Test extraction of heating (c.o.)"""
-        desc = "Do czynszu 2000 zł doliczyć c.o. 250 zł"
-        result = ms.extract_full_cost_from_description(desc, 2000)
-        assert result["additional_costs"] == 250
-
-    def test_extract_internet(self):
-        """Test extraction of internet cost"""
-        desc = "Czynsz 1800 zł, internet 50 zł"
-        result = ms.extract_full_cost_from_description(desc, 1800)
-        assert result["additional_costs"] == 50
-
-    def test_extract_comma_decimal_separator(self):
-        """Test extraction with comma as decimal separator"""
-        desc = "Media około 150,50 zł miesięcznie"
-        result = ms.extract_full_cost_from_description(desc, 2000)
-        assert result["additional_costs"] == 150.5
-
-    def test_extract_no_additional_costs_found(self):
-        """Test description without additional costs"""
-        desc = "Piękne mieszkanie w centrum miasta. Świetna lokalizacja."
-        result = ms.extract_full_cost_from_description(desc, 2000)
-        assert result["additional_costs"] == 0
-        assert result["full_cost"] == 2000
-        assert result["cost_details"] == []
-
-    @pytest.mark.parametrize("description,base_price,expected_additional", [
-        ("Czynsz admin: 300 zł", 2000, 300),
-        ("Media 200 zł", 2000, 200),
-        ("Parking: 150 zł", 2000, 150),
-        ("Dodatkowo 100 zł", 2000, 100),
-    ])
-    def test_extract_costs_parametrized(self, description, base_price, expected_additional):
-        """Parametrized test for cost extraction"""
-        result = ms.extract_full_cost_from_description(description, base_price)
-        assert result["additional_costs"] == expected_additional
-
-
-# =============================================================================
 # TEST extract_custom_fields_from_opis
 # =============================================================================
 
@@ -969,17 +875,6 @@ class TestIntegration:
         # Same offer is duplicate
         assert ms.is_duplicate_offer(offer["Name"], offer["Base_value"], offer["Link"]) is True
 
-    def test_price_and_cost_extraction_workflow(self):
-        """Test workflow: parse price, extract additional costs"""
-        base_price = ms.extract_price_from_text("2 000 zł")
-        description = "Czynsz 2000 zł. Dodatkowo czynsz administracyjny 300 zł i media 150 zł."
-
-        cost_info = ms.extract_full_cost_from_description(description, base_price)
-
-        assert cost_info["additional_costs"] == 450
-        assert cost_info["full_cost"] == 2450
-        assert len(cost_info["cost_details"]) == 2
-
     def test_date_and_address_parsing_workflow(self):
         """Test workflow: parse date and sanitize address"""
         date_text = "Odświeżono 15 listopada 2025 o 14:30"
@@ -1029,14 +924,6 @@ class TestEdgeCases:
         # String "2500" should fail isinstance(x, (int, float)) check
         assert is_valid is False
 
-    def test_extract_costs_with_malformed_patterns(self):
-        """Test cost extraction with malformed text"""
-        desc = "Media zł, czynsz abc zł, parking ??? zł"
-        result = ms.extract_full_cost_from_description(desc, 2000)
-        assert result["additional_costs"] == 0
-        assert result["full_cost"] == 2000
-
-
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
@@ -1083,3 +970,29 @@ class TestAddTotalCosts:
         ms.add_total_costs(df)
         assert list(df["Additional_value"]) == [0.0, 0.0]
         assert list(df["Full_value"]) == [2500.0, 0.0]
+
+
+# =============================================================================
+# TEST read_existing_llm_scores_map
+# =============================================================================
+
+class TestReadExistingLlmScoresMap:
+    class FakeWorksheet:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def get_all_values(self):
+            return self.rows
+
+    def test_reads_polish_headers(self):
+        # "pl" profiles write translated headers - the cache used to come back empty for them
+        header = ms.translate_header_row(["Link", "LLM_Score", "LLM_Summary", "LLM_Description", "LLM_Fees"], "pl")
+        ws = self.FakeWorksheet([header, ["https://x", "8", "fajne", "opis", "w cenie"]])
+        cache = ms.read_existing_llm_scores_map(ws)
+        assert cache["https://x"]["score"] == "8"
+        assert cache["https://x"]["fees"] == "w cenie"
+        assert cache["https://x"]["admin_fee"] == ""
+
+    def test_sheet_without_llm_columns(self):
+        ws = self.FakeWorksheet([["Link", "Name"], ["https://x", "flat"]])
+        assert ms.read_existing_llm_scores_map(ws) == {}

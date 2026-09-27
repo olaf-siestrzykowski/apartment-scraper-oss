@@ -130,6 +130,8 @@ def main():
             "name": row.get("Name"),
             "score": row.get("LLM_Score"),
             "summary": row.get("LLM_Summary"),
+            "description": row.get("LLM_Description"),
+            "fees": row.get("LLM_Fees"),
         }, ensure_ascii=False))
 
     # Quick email HTML preview
