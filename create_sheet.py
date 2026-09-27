@@ -20,7 +20,6 @@ Alternatively, enable Drive API for the service account:
 """
 
 import os
-import sys
 import json
 import argparse
 from pathlib import Path
@@ -56,7 +55,7 @@ def get_oauth_credentials():
         else:
             if not CLIENT_SECRETS.exists():
                 raise FileNotFoundError(
-                    f"client_secrets.json not found. See script docstring for instructions."
+                    "client_secrets.json not found. See script docstring for instructions."
                 )
             flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRETS), SCOPES)
             creds = flow.run_local_server(port=0)
@@ -125,7 +124,7 @@ def main():
 
     sheet_id = create_and_share_sheet(args.title, args.emails, args.service_account)
 
-    print(f"\nAdd to profiles.json:")
+    print("\nAdd to profiles.json:")
     print(json.dumps({"sheet_id": sheet_id}, indent=2))
 
 

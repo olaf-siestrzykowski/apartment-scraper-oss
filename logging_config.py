@@ -10,12 +10,10 @@ Features:
 """
 
 import logging
-import os
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional
-import traceback
+from typing import Dict, Any
 
 
 class IssueDumpFormatter(logging.Formatter):
@@ -243,7 +241,7 @@ def log_extraction_attempt(
     if page_state:
         logger.info(f"Page State: {page_state}")
     
-    logger.info(f"Selectors to test:")
+    logger.info("Selectors to test:")
     for field, selectors in selectors_to_test.items():
         logger.info(f"  • {field}: {len(selectors)} selector(s)")
         for i, sel in enumerate(selectors[:2], 1):  # Show first 2 selectors
@@ -380,7 +378,7 @@ def log_session_summary(
     success_rate = (successful / total_offers * 100) if total_offers > 0 else 0
     
     logger.info(f"\n{'='*80}")
-    logger.info(f"📊 SESSION SUMMARY - Complete Run")
+    logger.info("📊 SESSION SUMMARY - Complete Run")
     logger.info(f"{'='*80}")
     logger.info(f"Total Offers Processed: {total_offers}")
     logger.info(f"✅ Successfully Extracted: {successful} ({success_rate:.1f}%)")
@@ -390,7 +388,7 @@ def log_session_summary(
         logger.info(f"⏱️  Total Time: {total_time_seconds:.1f}s ({total_time_seconds/60:.1f} minutes)")
     
     if debug_handler:
-        logger.info(f"\n🔍 Debug Information:")
+        logger.info("\n🔍 Debug Information:")
         logger.info(f"  Session ID: {debug_handler.session_id}")
         logger.info(f"  Debug Directory: {debug_handler.session_dir}")
         logger.info(f"  HTML Dumps Saved: {debug_handler.stats['html_dumps_saved']}")
@@ -398,7 +396,7 @@ def log_session_summary(
         
         # Save and display issue summary
         if debug_handler.stats['issues_logged']:
-            logger.info(f"\n📋 Issues by Type:")
+            logger.info("\n📋 Issues by Type:")
             issue_types = {}
             for issue in debug_handler.stats['issues_logged']:
                 issue_type = issue['type']

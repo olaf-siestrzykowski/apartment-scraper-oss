@@ -6,7 +6,6 @@ particularly for the Kinguin scraper that experiences timeout issues.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass

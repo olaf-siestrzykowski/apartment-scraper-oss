@@ -1,0 +1,4 @@
+# Pyflakes rules only for now (unused imports/variables, undefined names).
+# Style rules can be enabled gradually as the scraper gets split into modules.
+[lint]
+select = ["F"]

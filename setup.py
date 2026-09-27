@@ -64,7 +64,7 @@ def check_dependencies():
             print("       Install manually: pip install " + " ".join(missing))
             sys.exit(1)
     else:
-        print(f"[OK]   All required packages present")
+        print("[OK]   All required packages present")
 
 
 def check_playwright():

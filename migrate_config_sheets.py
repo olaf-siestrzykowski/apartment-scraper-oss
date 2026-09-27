@@ -17,6 +17,6 @@ for name, profile in _ALL_PROFILES.items():
             default_otodom_url=profile["otodom_url"],
             default_origin=profile["origin_address"],
         )
-        print(f"  ✅ Done")
+        print("  ✅ Done")
     except Exception as e:
         print(f"  ❌ Error: {e}")
