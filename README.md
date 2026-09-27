@@ -45,6 +45,9 @@ on-demand by default; recurring runs are up to you (cron, systemd, or `scheduler
 - **Automated delivery pipeline** - Google Sheets API sync, HTML email digests, and
   Telegram notifications; a bundled scheduler reads per-profile timing from each sheet's
   config tab (you host/run it - no managed infra included)
+- **LLM-powered ranking** - optional Anthropic or Groq backend scores each listing
+  1-10 against natural-language preferences and generates a clean AI description shown
+  in the email digest; falls back gracefully when no API key is set
 - **Production-minded engineering** - structured logging with debug HTML snapshots,
   configurable timeout profiles, dedup logic, and a pytest suite covering the parsing
   and filtering logic
@@ -63,7 +66,10 @@ on-demand by default; recurring runs are up to you (cron, systemd, or `scheduler
 - Multiple named search profiles (price/area/room filters), each synced to its own
   Google Sheet
 - Commute distance/duration to a fixed origin address via OpenRouteService
-- Email digest of the best new listings (ranked by price per m²)
+- Email digest of the best new listings (ranked by price per m² or AI match score)
+- Optional LLM scoring via Anthropic or Groq: rates each listing 1-10 against
+  user-defined preferences and generates a concise AI description for the email digest;
+  set `ANTHROPIC_API_KEY` or `GROQ_API_KEY` (free at console.groq.com) to enable
 - Optional scheduler (`scheduler.py`) for running searches on a recurring basis - you
   keep it running via cron/systemd/similar
 - Re-extraction from previously saved HTML without re-scraping

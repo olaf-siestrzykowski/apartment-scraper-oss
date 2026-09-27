@@ -869,6 +869,7 @@ def read_existing_llm_scores_map(worksheet) -> dict:
             summary_col = header.index("LLM_Summary")
         except ValueError:
             return {}
+        desc_col = header.index("LLM_Description") if "LLM_Description" in header else None
         result = {}
         for row in data[1:]:
             max_col = max(link_col, score_col, summary_col)
@@ -876,8 +877,9 @@ def read_existing_llm_scores_map(worksheet) -> dict:
                 link = row[link_col].strip()
                 score = row[score_col].strip()
                 summary = row[summary_col].strip() if len(row) > summary_col else ""
+                description = row[desc_col].strip() if desc_col is not None and len(row) > desc_col else ""
                 if link and score and score not in ("", "nan"):
-                    result[link] = {"score": score, "summary": summary}
+                    result[link] = {"score": score, "summary": summary, "description": description}
         return result
     except Exception as e:
         logger.debug(f"Could not read existing LLM scores: {e}")
@@ -1054,7 +1056,7 @@ def reorder_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
     Returns a new DataFrame with reordered columns.
     """
     priority_columns = [
-        'Status', 'LLM_Score', 'LLM_Summary',
+        'Status', 'LLM_Score', 'LLM_Summary', 'LLM_Description',
         'Name', 'Base_value', 'Additional_value', 'Full_value',
         'Area', 'Address', 'Distance_km', 'Duration_min', 'Link',
         'Image_URL', 'Price_Detail', 'Area_Detail', 'Location', 'Description',
@@ -1075,7 +1077,7 @@ def reorder_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
 # Internal code always keeps using the English keys below - this only changes
 # what a "pl" profile sees as column headers in Google Sheets.
 COLUMN_HEADERS_PL = {
-    "Status": "Status", "LLM_Score": "Ocena AI", "LLM_Summary": "Podsumowanie AI",
+    "Status": "Status", "LLM_Score": "Ocena AI", "LLM_Summary": "Podsumowanie AI", "LLM_Description": "Opis AI",
     "Name": "Nazwa", "Base_value": "Cena bazowa",
     "Additional_value": "Opłaty dodatkowe", "Full_value": "Cena całkowita",
     "Area": "Powierzchnia", "Address": "Adres", "Distance_km": "Odległość (km)",

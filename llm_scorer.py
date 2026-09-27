@@ -42,11 +42,13 @@ def _build_listing_text(row: dict) -> str:
 
 def _build_prompt(listing_text: str, preferences: str) -> str:
     return (
-        "Score this apartment listing 1-10 against the user's preferences.\n\n"
+        "Score this apartment listing 1-10 against the user's preferences "
+        "and write a short description of the listing.\n\n"
         f"USER PREFERENCES:\n{preferences}\n\n"
         f"LISTING:\n{listing_text}\n\n"
         "Reply with valid JSON only, no markdown, no explanation:\n"
-        '{"score": <integer 1-10>, "summary": "<one sentence reason>"}'
+        '{"score": <integer 1-10>, "summary": "<one sentence why this score>", '
+        '"description": "<2-3 sentence neutral summary of the apartment: size, price, location, key amenities>"}'
     )
 
 
@@ -61,7 +63,8 @@ def _parse_llm_response(text: str) -> dict:
     parsed = json.loads(text)
     score = max(1, min(10, int(parsed["score"])))
     summary = str(parsed.get("summary", ""))[:200]
-    return {"score": score, "summary": summary}
+    description = str(parsed.get("description", ""))[:400]
+    return {"score": score, "summary": summary, "description": description}
 
 
 def _score_with_anthropic(prompt: str, client) -> dict:
@@ -168,6 +171,7 @@ def score_listings_df(
     if "LLM_Score" not in df.columns:
         df["LLM_Score"] = ""
         df["LLM_Summary"] = ""
+        df["LLM_Description"] = ""
 
     scored = 0
     from_cache = 0
@@ -184,12 +188,14 @@ def score_listings_df(
         if link in cached:
             df.at[idx, "LLM_Score"] = cached[link]["score"]
             df.at[idx, "LLM_Summary"] = cached[link]["summary"]
+            df.at[idx, "LLM_Description"] = cached[link].get("description", "")
             from_cache += 1
             continue
 
         result = score_listing(dict(row), preferences, backend)
         df.at[idx, "LLM_Score"] = result["score"]
         df.at[idx, "LLM_Summary"] = result["summary"]
+        df.at[idx, "LLM_Description"] = result["description"]
         scored += 1
         if backend["type"] == "anthropic" and scored % 10 == 0:
             time.sleep(0.5)

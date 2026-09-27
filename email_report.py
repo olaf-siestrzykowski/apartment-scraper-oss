@@ -385,11 +385,15 @@ def generate_email_html(top_df: pd.DataFrame, profile: str, sheet_id: str, today
         except (ValueError, TypeError):
             price_m2 = str(price_m2)
 
-        opis = str(row.get("Description", "") or "")
-        opis = re.sub(r'^Opis\s*', '', opis, flags=re.IGNORECASE)
-        desc_excerpt = opis[:350].replace("\n", " ").strip()
-        if len(opis) > 350:
-            desc_excerpt += "…"
+        llm_desc = str(row.get("LLM_Description", "") or "").strip()
+        if llm_desc and llm_desc != "nan":
+            desc_excerpt = llm_desc
+        else:
+            opis = str(row.get("Description", "") or "")
+            opis = re.sub(r'^Opis\s*', '', opis, flags=re.IGNORECASE)
+            desc_excerpt = opis[:350].replace("\n", " ").strip()
+            if len(opis) > 350:
+                desc_excerpt += "…"
 
         rows_html.append(_OFFER_ROW_TMPL.format(
             img_html=_img_tag(row.get("Image_URL", "")),
