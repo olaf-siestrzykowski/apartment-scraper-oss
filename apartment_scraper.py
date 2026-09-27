@@ -263,11 +263,20 @@ def geocode_photon(address: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+_warned_unknown_cities: set = set()
+
+
 def is_within_city_bounds(coords: Dict[str, Any], city: str = "Warszawa") -> bool:
     """Check if coordinates are within the given city's bounding box"""
     if not coords:
         return False
-    bounds = CITY_BOUNDS.get(city, WARSAW_BOUNDS)
+    bounds = CITY_BOUNDS.get(city)
+    if bounds is None:
+        # Unknown city: don't reject every address against another city's box
+        if city not in _warned_unknown_cities:
+            logger.warning(f"⚠️ No bounding box for city '{city}' - skipping the in-city check")
+            _warned_unknown_cities.add(city)
+        return True
     lat = coords.get("lat", 0)
     lon = coords.get("lon", 0)
     return (bounds["lat_min"] <= lat <= bounds["lat_max"] and
