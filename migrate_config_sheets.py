@@ -5,9 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from apartment_scraper import _ALL_PROFILES, _open_spreadsheet, load_config_sheet
+from apartment_scraper import _open_spreadsheet, load_config_sheet, load_profiles
 
-for name, profile in _ALL_PROFILES.items():
+for name, profile in load_profiles().items():
     print(f"Updating config sheet for '{name}'...")
     try:
         sp = _open_spreadsheet(profile["sheet_id"])

@@ -17,16 +17,18 @@ import json
 from typing import Optional, Dict, Any, List
 import requests
 
-# Import enhanced logging configuration
+import logging
+
 from logging_config import (
     setup_comprehensive_logging,
     log_extraction_attempt,
     log_extraction_result
 )
 
-# Configure enhanced logging with HTML debugging
-logger, debug_handler = setup_comprehensive_logging(include_html_debugging=True)
-logger.info("🚀 Starting Web Scraper Session")
+# setup_comprehensive_logging() (called from main) configures this same logger and
+# creates the log/debug folders - importing the module has no side effects.
+logger = logging.getLogger("logging_config")
+debug_handler = None
 
 
 class ProgressTracker:
@@ -118,44 +120,33 @@ def load_profiles() -> dict:
     return {p["name"]: p for p in data["profiles"]}
 
 
-_ALL_PROFILES = load_profiles()
+def build_arg_parser(profile_names: List[str]) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Scrape flats from OLX/Otodom")
+    parser.add_argument("--search", choices=profile_names, default=profile_names[0],
+                        help="Search profile to run (defined in profiles.json)")
+    parser.add_argument("--reextract", action="store_true",
+                        help="Re-extract data from saved HTML files instead of scraping")
+    parser.add_argument("--html-folder", type=str, default=None,
+                        help="Folder containing saved HTML files for re-extraction (default: today's folder)")
+    parser.add_argument("--pickle-file", type=str, default=None,
+                        help="Pickle file to load/update for re-extraction or distance calculation")
+    parser.add_argument("--force-all", action="store_true",
+                        help="Force re-extraction even for offers that already have data")
+    parser.add_argument("--calc-distance", action="store_true",
+                        help="Calculate distance from apartments to office")
+    parser.add_argument("--office-address", type=str, default=None,
+                        help="Override office address for distance calculation")
+    parser.add_argument("--transport-mode",
+                        choices=["driving-car", "cycling-regular", "foot-walking", "public-transport"],
+                        default=None, help="Transport mode (overrides config sheet; default: foot-walking)")
+    return parser
 
-parser = argparse.ArgumentParser(description="Scrape flats from OLX/Otodom")
-parser.add_argument("--search", choices=list(_ALL_PROFILES.keys()),
-                    default=list(_ALL_PROFILES.keys())[0],
-                    help="Search profile to run (defined in profiles.json)")
-parser.add_argument("--reextract", action="store_true",
-                    help="Re-extract data from saved HTML files instead of scraping")
-parser.add_argument("--html-folder", type=str, default=None,
-                    help="Folder containing saved HTML files for re-extraction (default: today's folder)")
-parser.add_argument("--pickle-file", type=str, default=None,
-                    help="Pickle file to load/update for re-extraction or distance calculation")
-parser.add_argument("--force-all", action="store_true",
-                    help="Force re-extraction even for offers that already have data")
-parser.add_argument("--calc-distance", action="store_true",
-                    help="Calculate distance from apartments to office")
-parser.add_argument("--office-address", type=str, default=None,
-                    help="Override office address for distance calculation")
-parser.add_argument("--transport-mode", choices=["driving-car", "cycling-regular", "foot-walking", "public-transport"],
-                    default=None, help="Transport mode (overrides config sheet; default: foot-walking)")
-
-# Only parse arguments if running as main script, not when imported as a module
-if __name__ == "__main__":
-    args = parser.parse_args()
-    search = args.search
-else:
-    # Default values when imported as a module
-    search = list(_ALL_PROFILES.keys())[0]
-    args = argparse.Namespace(reextract=False, html_folder=None, pickle_file=None, force_all=False,
-                              calc_distance=False, office_address=None, transport_mode=None)
 
 # ============================================================================
 # CONFIGURATION - CREDENTIALS AND API KEYS (Use environment variables!)
 # ============================================================================
 # OpenRouteService API key for distance calculations
 API_KEY = os.environ.get('OPENROUTESERVICE_API_KEY')
-if not API_KEY:
-    logger.warning("⚠️  OPENROUTESERVICE_API_KEY not set in environment. Distance calculation will fail.")
 
 # Google Sheets credentials path - resolved relative to this script file
 GOOGLE_CREDS_PATH = os.environ.get(
@@ -163,20 +154,38 @@ GOOGLE_CREDS_PATH = os.environ.get(
     str(Path(__file__).parent / 'google-credentials.json')
 )
 
-# Load active profile from profiles.json
-_profile   = _ALL_PROFILES[search]
-olx_url    = _profile["olx_url"]
-otodom_url = _profile["otodom_url"]
-sheet_id   = _profile["sheet_id"]
-origin     = _profile["origin_address"]
-search_city = _profile["city"]
+# Active run configuration - filled in by configure() before run() / re-extraction.
+args = argparse.Namespace(reextract=False, html_folder=None, pickle_file=None, force_all=False,
+                          calc_distance=False, office_address=None, transport_mode=None)
+search: Optional[str] = None
+olx_url: Optional[str] = None
+otodom_url: Optional[str] = None
+sheet_id: Optional[str] = None
+origin: Optional[str] = None
+search_city: Optional[str] = None
+_profile: Dict[str, Any] = {}
 
 offers_df = pd.DataFrame()
 # Global set to track seen offers and prevent duplicates
 seen_offers = set()
 # Holds config loaded from the "config" sheet at runtime (populated by run())
 _run_config: dict = {}
-logger.info(f'Search configuration: {search} (city: {search_city}, office: {origin})')
+
+
+def configure(cli_args: argparse.Namespace, profile: Dict[str, Any]) -> None:
+    """Set the active search profile and CLI options for this process."""
+    global args, _profile, search, olx_url, otodom_url, sheet_id, origin, search_city
+    args = cli_args
+    _profile = profile
+    search = profile["name"]
+    olx_url = profile["olx_url"]
+    otodom_url = profile["otodom_url"]
+    sheet_id = profile["sheet_id"]
+    origin = profile["origin_address"]
+    search_city = profile["city"]
+    if not API_KEY:
+        logger.warning("⚠️  OPENROUTESERVICE_API_KEY not set in environment. Distance calculation will fail.")
+    logger.info(f'Search configuration: {search} (city: {search_city}, office: {origin})')
 
 
 # ============================================================================
@@ -3379,27 +3388,6 @@ def save_html_to_file(html_content, index, url, export_folder="exports/html"):
         file_size_kb = len(html_content) / 1024
         logger.info(f"💾 Saved HTML for {source} offer {index}: {filepath.name} ({file_size_kb:.1f} KB)")
 
-        # Also save a copy to the debug handler if available
-        try:
-            from logging_config import debug_handler
-            if debug_handler:
-                debug_metadata = {
-                    "filename": filename,
-                    "size_bytes": len(html_content),
-                    "source": source,
-                    "timestamp": timestamp
-                }
-                debug_path = debug_handler.save_html_for_issue(
-                    html_content=html_content,
-                    issue_type="offer_snapshot",
-                    offer_index=index,
-                    url=url,
-                    metadata=debug_metadata
-                )
-                if debug_path:
-                    logger.debug(f"🔍 Debug copy saved to: {debug_path}")
-        except ImportError:
-            pass  # Debug handler unavailable
         
         return str(filepath)
         
@@ -4610,6 +4598,12 @@ def run(playwright: Playwright) -> None:
 
 
 if __name__ == "__main__":
+    _profiles = load_profiles()
+    _cli_args = build_arg_parser(list(_profiles)).parse_args()
+    logger, debug_handler = setup_comprehensive_logging(include_html_debugging=True)
+    logger.info("🚀 Starting Web Scraper Session")
+    configure(_cli_args, _profiles[_cli_args.search])
+
     # Check if running in re-extraction mode
     if args.reextract:
         logger.info("="*60)
