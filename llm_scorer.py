@@ -128,9 +128,9 @@ def _parse_fees(parsed: dict) -> dict:
 
 
 _FEE_LABELS = {
-    "pl": {"included": "w cenie", "unknown": "brak informacji", "extra": "dodatkowo",
+    "pl": {"included": "w cenie", "unknown": "brak informacji", "extra": "dodatkowo (bez kwoty)",
            "admin": "adm.", "utilities": "media ok.", "optional": "opcjonalnie"},
-    "en": {"included": "included", "unknown": "not stated", "extra": "extra",
+    "en": {"included": "included", "unknown": "not stated", "extra": "extra (amount not stated)",
            "admin": "admin fee", "utilities": "utilities ~", "optional": "optional"},
 }
 

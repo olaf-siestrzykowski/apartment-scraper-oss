@@ -96,7 +96,7 @@ class TestFormatFees:
         assert ls.format_fees({"fees_status": "included"}, "en") == "included"
 
     def test_extra_without_amount(self):
-        assert ls.format_fees({"fees_status": "extra", "admin_fee": None}, "pl") == "dodatkowo"
+        assert ls.format_fees({"fees_status": "extra", "admin_fee": None}, "pl") == "dodatkowo (bez kwoty)"
 
     def test_unknown(self):
         assert ls.format_fees({"fees_status": "unknown"}, "pl") == "brak informacji"
