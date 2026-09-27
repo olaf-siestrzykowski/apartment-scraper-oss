@@ -9,7 +9,7 @@ optional top-N email digest - no manual browsing required. Bring your own schedu
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
 ![Playwright](https://img.shields.io/badge/Playwright-Web%20Scraping-2EAD33?logo=playwright&logoColor=white)
 ![Google Sheets API](https://img.shields.io/badge/Google%20Sheets-API-34A853?logo=googlesheets&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)
+[![CI](https://github.com/olaf-siestrzykowski/apartment-scraper-oss/actions/workflows/ci.yml/badge.svg)](https://github.com/olaf-siestrzykowski/apartment-scraper-oss/actions/workflows/ci.yml)
 ![License](https://img.shields.io/badge/license-Noncommercial-informational)
 
 ## How it works

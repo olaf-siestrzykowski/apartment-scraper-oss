@@ -132,15 +132,25 @@ class TestIsPolishLanguage:
         assert er._is_polish_language(offer) is False
 
 
-class TestIsWarsaw:
-    def test_warsaw_address_passes(self):
-        assert er._is_warsaw(make_offer(Address="Warszawa, Mokotów"))
+class TestIsInCity:
+    WARSAW = er._build_city_regex("Warszawa, Poland")
 
-    def test_outside_warsaw_fails(self):
-        assert not er._is_warsaw(make_offer(Address="Marki", Location="Marki"))
+    def test_city_address_passes(self):
+        assert er._is_in_city(make_offer(Address="Warszawa, Mokotów"), self.WARSAW)
+
+    def test_outside_city_fails(self):
+        assert not er._is_in_city(make_offer(Address="Marki", Location="Marki"), self.WARSAW)
 
     def test_matches_via_location_when_address_missing(self):
-        assert er._is_warsaw(make_offer(Address="", Location="Warszawa"))
+        assert er._is_in_city(make_offer(Address="", Location="Warszawa"), self.WARSAW)
+
+    def test_diacritics_are_folded(self):
+        krakow = er._build_city_regex("Kraków")
+        assert er._is_in_city(make_offer(Address="Krakow, Podgórze"), krakow)
+
+    def test_no_city_disables_filter(self):
+        assert er._build_city_regex("") is None
+        assert er._is_in_city(make_offer(Address="Marki", Location="Marki"), None)
 
 
 class TestFilterQualityOffers:
@@ -158,9 +168,9 @@ class TestFilterQualityOffers:
         result = er.filter_quality_offers(df)
         assert result.empty
 
-    def test_offer_outside_warsaw_is_dropped(self):
+    def test_offer_outside_city_is_dropped(self):
         df = pd.DataFrame([make_offer(Address="Marki", Location="Marki")])
-        result = er.filter_quality_offers(df)
+        result = er.filter_quality_offers(df, city_re=er._build_city_regex("Warszawa"))
         assert result.empty
 
     def test_district_filter_drops_wrong_district(self):

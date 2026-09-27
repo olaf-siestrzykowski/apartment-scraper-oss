@@ -110,8 +110,13 @@ class ProgressTracker:
 extraction_progress: Optional[ProgressTracker] = None
 
 def load_profiles() -> dict:
-    """Load search profiles from profiles.json next to this script."""
-    profiles_path = Path(__file__).parent / "profiles.json"
+    """Load search profiles from profiles.json next to this script.
+
+    Set APARTMENT_PROFILES_PATH to load a different file (the test suite points it
+    at profiles.example.json so it runs on a fresh clone).
+    """
+    profiles_path = Path(os.environ.get("APARTMENT_PROFILES_PATH")
+                         or Path(__file__).parent / "profiles.json")
     if not profiles_path.exists():
         raise FileNotFoundError(
             f"profiles.json not found at {profiles_path}. "
