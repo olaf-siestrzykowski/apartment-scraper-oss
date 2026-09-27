@@ -312,6 +312,7 @@ Both fields must be set for notifications to send. Leave either empty to disable
 | `olx_url` | yes | OLX search URL with your filters applied |
 | `otodom_url` | yes | Otodom search URL with your filters applied |
 | `sheet_id` | yes | Google Sheet ID (from the sheet's URL) |
+| `worksheet` | no | Tab the listings are written to (default: `apartment list`); created if the spreadsheet does not have it. Use a separate tab to share one spreadsheet with another tool |
 | `origin_address` | yes | Full address used for commute time calculation |
 | `city` | yes | City name (e.g. `Warszawa`, `Kraków`, `Gdańsk`). Used for geocoding bounds and to filter the email digest to listings within the city. |
 | `email_sender` | no | Gmail address to send the digest from |
@@ -321,7 +322,9 @@ Both fields must be set for notifications to send. Leave either empty to disable
 | `email_top_n` | no | How many listings to include in the digest (default: 10) |
 | `telegram_bot_token` | no | Telegram bot token from @BotFather |
 | `telegram_chat_id` | no | Telegram chat/user ID to send notifications to |
-| `language` | no | `en` or `pl` - controls column headers, email text, and Telegram messages (default: `en`) |
+| `language` | no | `en` or `pl` - controls column headers, email text, Telegram messages and the `LLM_Fees` text (default: `en`; a `Language` row in the config tab overrides it) |
+| `llm_preferences` | no | What you are looking for, in plain language - enables LLM scoring, descriptions and fee extraction |
+| `groq_model` | no | Groq model for LLM scoring (default: `openai/gpt-oss-20b`) |
 
 #### 3. Environment variables
 

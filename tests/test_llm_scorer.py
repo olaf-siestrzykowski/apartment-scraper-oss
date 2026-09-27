@@ -114,6 +114,11 @@ class TestPrompt:
         assert "advertised_rent_pln: 3000" in text
         assert "czynsz adm. 716 zł" in text  # fee details near the end must not be cut off
 
+    def test_prompt_asks_for_profile_language(self):
+        assert "in Polish" in ls._build_prompt("listing", "prefs", "pl")
+        assert "in English" in ls._build_prompt("listing", "prefs")
+        assert "in English" in ls._build_prompt("listing", "prefs", "de")
+
     def test_groq_payload_limits_reasoning_for_gpt_oss(self):
         payload = ls._groq_payload("prompt", "openai/gpt-oss-20b")
         assert payload["reasoning_effort"] == "low"

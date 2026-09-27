@@ -61,10 +61,15 @@ def _build_listing_text(row: dict) -> str:
     return "\n".join(f"  {k}: {v}" for k, v in fields if v and str(v).strip())
 
 
-def _build_prompt(listing_text: str, preferences: str) -> str:
+_LANGUAGE_NAMES = {"pl": "Polish", "en": "English"}
+
+
+def _build_prompt(listing_text: str, preferences: str, language: str = "en") -> str:
+    language_name = _LANGUAGE_NAMES.get(language, "English")
     return (
         "Score this apartment listing 1-10 against the user's preferences, write a short "
-        "description of the listing, and extract the monthly fees stated in the listing.\n\n"
+        "description of the listing, and extract the monthly fees stated in the listing.\n"
+        f"Write \"summary\" and \"description\" in {language_name}.\n\n"
         f"USER PREFERENCES:\n{preferences}\n\n"
         f"LISTING:\n{listing_text}\n\n"
         "FEES - read the description carefully (it is usually in Polish):\n"
@@ -229,10 +234,10 @@ def _score_with_groq(prompt: str, model: str, api_key: str, max_retries: int = 5
     raise RuntimeError(f"Groq request not resolved after {max_retries} retries")
 
 
-def score_listing(listing: dict, preferences: str, backend: dict) -> dict:
+def score_listing(listing: dict, preferences: str, backend: dict, language: str = "en") -> dict:
     """Score one listing using the configured backend. Returns a dict shaped like EMPTY_RESULT."""
     listing_text = _build_listing_text(listing)
-    prompt = _build_prompt(listing_text, preferences)
+    prompt = _build_prompt(listing_text, preferences, language)
     name = listing.get("Name", "")
     try:
         if backend["type"] == "anthropic":
@@ -323,7 +328,7 @@ def score_listings_df(
             from_cache += 1
             continue
 
-        result = score_listing(dict(row), preferences, backend)
+        result = score_listing(dict(row), preferences, backend, language)
         df.at[idx, "LLM_Score"] = result["score"]
         df.at[idx, "LLM_Summary"] = result["summary"]
         df.at[idx, "LLM_Description"] = result["description"]
