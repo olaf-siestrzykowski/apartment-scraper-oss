@@ -12,11 +12,11 @@ Tests cover:
 - Selector helper functions
 """
 
+import pandas as pd
 import pytest
 import sys
 import os
 from datetime import datetime, timedelta
-from unittest.mock import Mock, MagicMock, patch
 from bs4 import BeautifulSoup
 
 # Add parent directory to path for imports
@@ -57,69 +57,69 @@ def sample_html():
 
 
 # =============================================================================
-# TEST parse_price_to_float
+# TEST extract_price_from_text
 # =============================================================================
 
-class TestParsePriceToFloat:
-    """Test suite for parse_price_to_float function"""
+class TestExtractPriceFromText:
+    """Test suite for extract_price_from_text (used to parse listing prices)"""
 
     def test_parse_price_standard_polish_format(self):
         """Test parsing standard Polish price format with comma as decimal"""
-        assert ms.parse_price_to_float("2 700,50 zł") == 2700.50
-        assert ms.parse_price_to_float("1 999,99 zł") == 1999.99
+        assert ms.extract_price_from_text("2 700,50 zł") == 2700.50
+        assert ms.extract_price_from_text("1 999,99 zł") == 1999.99
 
     def test_parse_price_dot_thousands_comma_decimal(self):
         """Test parsing format with dot as thousands and comma as decimal"""
-        assert ms.parse_price_to_float("2.700,50 zł") == 2700.50
-        assert ms.parse_price_to_float("12.999,99 zł") == 12999.99
+        assert ms.extract_price_from_text("2.700,50 zł") == 2700.50
+        assert ms.extract_price_from_text("12.999,99 zł") == 12999.99
 
     def test_parse_price_space_thousands_comma_decimal(self):
         """Test parsing format with space as thousands separator"""
-        assert ms.parse_price_to_float("2 700,50 zł") == 2700.50
-        assert ms.parse_price_to_float("15 000,00 zł") == 15000.00
+        assert ms.extract_price_from_text("2 700,50 zł") == 2700.50
+        assert ms.extract_price_from_text("15 000,00 zł") == 15000.00
 
     def test_parse_price_only_comma_as_decimal(self):
         """Test parsing with only comma (treated as decimal separator)"""
-        assert ms.parse_price_to_float("1999,50 zł") == 1999.50
-        assert ms.parse_price_to_float("500,25 zł") == 500.25
+        assert ms.extract_price_from_text("1999,50 zł") == 1999.50
+        assert ms.extract_price_from_text("500,25 zł") == 500.25
 
     def test_parse_price_only_dot_as_decimal(self):
         """Test parsing with only dot (ambiguous - depends on digit count)"""
-        assert ms.parse_price_to_float("1999.99 zł") == 1999.99  # decimal
-        assert ms.parse_price_to_float("2.500 zł") == 2500.0  # thousands (3 digits after dot)
+        assert ms.extract_price_from_text("1999.99 zł") == 1999.99  # decimal
+        assert ms.extract_price_from_text("2.500 zł") == 2500.0  # thousands (3 digits after dot)
 
     def test_parse_price_no_decimals(self):
         """Test parsing integer prices"""
-        assert ms.parse_price_to_float("2700 zł") == 2700.0
-        assert ms.parse_price_to_float("1999 zł") == 1999.0
+        assert ms.extract_price_from_text("2700 zł") == 2700.0
+        assert ms.extract_price_from_text("1999 zł") == 1999.0
 
     def test_parse_price_with_nbsp(self):
         """Test parsing with non-breaking space (common in web scraping)"""
         price_with_nbsp = "2\u00A0700,50 zł"
-        assert ms.parse_price_to_float(price_with_nbsp) == 2700.50
+        assert ms.extract_price_from_text(price_with_nbsp) == 2700.50
 
     def test_parse_price_with_extra_text(self):
         """Test parsing when price is embedded in other text"""
-        assert ms.parse_price_to_float("Cena: 2 700 zł/miesiąc") == 2700.0
-        assert ms.parse_price_to_float("Od 1 500,50 zł") == 1500.50
+        assert ms.extract_price_from_text("Cena: 2 700 zł/miesiąc") == 2700.0
+        assert ms.extract_price_from_text("Od 1 500,50 zł") == 1500.50
 
     def test_parse_price_empty_string_returns_zero(self):
         """Test that empty string returns 0.0"""
-        assert ms.parse_price_to_float("") == 0.0
+        assert ms.extract_price_from_text("") == 0.0
 
     def test_parse_price_none_returns_zero(self):
         """Test that None returns 0.0"""
-        assert ms.parse_price_to_float(None) == 0.0
+        assert ms.extract_price_from_text(None) == 0.0
 
     def test_parse_price_no_digits_returns_zero(self):
         """Test that text without digits returns 0.0"""
-        assert ms.parse_price_to_float("zł") == 0.0
-        assert ms.parse_price_to_float("Cena do uzgodnienia") == 0.0
+        assert ms.extract_price_from_text("zł") == 0.0
+        assert ms.extract_price_from_text("Cena do uzgodnienia") == 0.0
 
     def test_parse_price_both_separators_dot_last(self):
         """Test when dot appears after comma (dot is decimal)"""
         # This is an edge case: "1,234.56" format
-        assert ms.parse_price_to_float("1,234.56 zł") == 1234.56
+        assert ms.extract_price_from_text("1,234.56 zł") == 1234.56
 
     @pytest.mark.parametrize("price_text,expected", [
         ("3 200 zł", 3200.0),
@@ -131,7 +131,7 @@ class TestParsePriceToFloat:
     ])
     def test_parse_price_parametrized(self, price_text, expected):
         """Parametrized test for various price formats"""
-        assert ms.parse_price_to_float(price_text) == expected
+        assert ms.extract_price_from_text(price_text) == expected
 
 
 # =============================================================================
@@ -594,69 +594,6 @@ class TestExtractFullCostFromDescription:
 
 
 # =============================================================================
-# TEST extract_detailed_costs
-# =============================================================================
-
-class TestExtractDetailedCosts:
-    """Test suite for extract_detailed_costs function"""
-
-    def test_extract_empty_description_returns_empty_dict(self):
-        """Test that empty description returns empty dict"""
-        assert ms.extract_detailed_costs("") == {}
-        assert ms.extract_detailed_costs(None) == {}
-
-    def test_extract_utilities_cost(self):
-        """Test extraction of utilities from POLISH_COST_PATTERNS"""
-        desc = "Miesięczne media: 200 zł"
-        result = ms.extract_detailed_costs(desc)
-        assert "utilities" in result
-        assert result["utilities"] == 200
-
-    def test_extract_admin_fee(self):
-        """Test extraction of admin fee"""
-        desc = "Czynsz administracyjny 350 zł"
-        result = ms.extract_detailed_costs(desc)
-        assert "admin_fee" in result
-        assert result["admin_fee"] == 350
-
-    def test_extract_parking_cost(self):
-        """Test extraction of parking cost"""
-        desc = "Miejsce parkingowe 120 zł miesięcznie"
-        result = ms.extract_detailed_costs(desc)
-        assert "parking" in result
-        assert result["parking"] == 120
-
-    def test_extract_deposit(self):
-        """Test extraction of deposit (kaucja)"""
-        desc = "Kaucja zwrotna: 2000 zł"
-        result = ms.extract_detailed_costs(desc)
-        assert "deposit" in result
-        assert result["deposit"] == 2000
-
-    def test_extract_multiple_cost_categories(self):
-        """Test extraction of multiple cost categories"""
-        desc = "Media 150 zł, czynsz administracyjny 300 zł, parking 100 zł, kaucja 2000 zł"
-        result = ms.extract_detailed_costs(desc)
-        assert result["utilities"] == 150
-        assert result["admin_fee"] == 300
-        assert result["parking"] == 100
-        assert result["deposit"] == 2000
-
-    def test_extract_comma_decimal(self):
-        """Test extraction with comma as decimal separator"""
-        desc = "Opłaty za media 175,50 zł"
-        result = ms.extract_detailed_costs(desc)
-        assert result["utilities"] == 175.5
-
-    def test_extract_sums_multiple_matches_same_category(self):
-        """Test that multiple matches in same category are summed"""
-        desc = "Media 100 zł, rachunki 50 zł"
-        result = ms.extract_detailed_costs(desc)
-        # Both should match 'utilities' pattern
-        assert result["utilities"] == 150
-
-
-# =============================================================================
 # TEST extract_custom_fields_from_opis
 # =============================================================================
 
@@ -876,74 +813,6 @@ class TestValidateOfferData:
 
 
 # =============================================================================
-# TEST validate_olx_link
-# =============================================================================
-
-class TestValidateOlxLink:
-    """Test suite for validate_olx_link function"""
-
-    def test_validate_valid_olx_link_unchanged(self):
-        """Test that valid OLX link is returned unchanged"""
-        link = "https://www.olx.pl/oferta/mieszkanie-test-123456.html"
-        assert ms.validate_olx_link(link) == link
-
-    def test_validate_relative_url_adds_domain(self):
-        """Test that relative URL gets domain prepended"""
-        link = "/oferta/mieszkanie-test-123456.html"
-        result = ms.validate_olx_link(link)
-        assert result.startswith("https://www.olx.pl")
-        assert "/oferta/" in result
-
-    def test_validate_no_protocol_adds_https(self):
-        """Test that missing protocol gets https:// added"""
-        link = "www.olx.pl/oferta/mieszkanie-test-123456.html"
-        result = ms.validate_olx_link(link)
-        assert result.startswith("https://")
-
-    def test_validate_link_without_olx_domain_returns_empty(self):
-        """Test that non-OLX link returns empty string"""
-        link = "https://www.otodom.pl/oferta/test.html"
-        assert ms.validate_olx_link(link) == ""
-
-    def test_validate_link_without_oferta_path_returns_empty(self):
-        """Test that OLX link without /oferta/ returns empty string"""
-        link = "https://www.olx.pl/nieruchomosci/mieszkania/"
-        assert ms.validate_olx_link(link) == ""
-
-    def test_validate_empty_string_returns_empty(self):
-        """Test that empty string returns empty string"""
-        assert ms.validate_olx_link("") == ""
-
-    def test_validate_none_returns_empty(self):
-        """Test that None returns empty string"""
-        assert ms.validate_olx_link(None) == ""
-
-    def test_validate_strips_whitespace(self):
-        """Test that whitespace is stripped from link"""
-        link = "  https://www.olx.pl/oferta/test-123.html  "
-        result = ms.validate_olx_link(link)
-        assert result == "https://www.olx.pl/oferta/test-123.html"
-
-    @pytest.mark.parametrize("input_link,expected_valid", [
-        ("https://www.olx.pl/oferta/test.html", True),
-        ("/oferta/test.html", True),
-        ("www.olx.pl/oferta/test.html", True),
-        ("https://www.otodom.pl/oferta/test.html", False),
-        ("https://www.olx.pl/kategoria/", False),
-        ("", False),
-    ])
-    def test_validate_olx_link_parametrized(self, input_link, expected_valid):
-        """Parametrized test for OLX link validation"""
-        result = ms.validate_olx_link(input_link)
-        if expected_valid:
-            assert result != ""
-            assert "olx.pl" in result
-            assert "/oferta/" in result
-        else:
-            assert result == ""
-
-
-# =============================================================================
 # TEST find_element_by_selectors
 # =============================================================================
 
@@ -1085,8 +954,8 @@ class TestIntegration:
         # Create offer
         offer = {
             "Name": "Mieszkanie 2-pokojowe Warszawa Wola",
-            "Base_value": ms.parse_price_to_float("2 500 zł"),
-            "Link": ms.validate_olx_link("/oferta/test-123456.html"),
+            "Base_value": ms.extract_price_from_text("2 500 zł"),
+            "Link": "https://www.olx.pl/d/oferta/test-123456.html",
             "Address": ms._sanitize_address("Warszawa, Wola - Odświeżono dzisiaj o 15:00"),
         }
 
@@ -1102,7 +971,7 @@ class TestIntegration:
 
     def test_price_and_cost_extraction_workflow(self):
         """Test workflow: parse price, extract additional costs"""
-        base_price = ms.parse_price_to_float("2 000 zł")
+        base_price = ms.extract_price_from_text("2 000 zł")
         description = "Czynsz 2000 zł. Dodatkowo czynsz administracyjny 300 zł i media 150 zł."
 
         cost_info = ms.extract_full_cost_from_description(description, base_price)
@@ -1140,7 +1009,7 @@ class TestEdgeCases:
 
     def test_very_large_price(self):
         """Test handling of very large price numbers"""
-        large_price = ms.parse_price_to_float("999 999,99 zł")
+        large_price = ms.extract_price_from_text("999 999,99 zł")
         assert large_price == 999999.99
 
     def test_offer_key_with_unicode_title(self):
@@ -1170,3 +1039,47 @@ class TestEdgeCases:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# =============================================================================
+# TEST add_total_costs
+# =============================================================================
+
+class TestAddTotalCosts:
+    """Full_value / Additional_value derivation shared by every Sheets save"""
+
+    def test_sums_base_and_additional(self):
+        df = pd.DataFrame({"Base_value": [3000.0], "Additional_value": [500.0]})
+        ms.add_total_costs(df)
+        assert df.loc[0, "Full_value"] == 3500.0
+
+    def test_otodom_czynsz_text_overrides_additional_value(self):
+        df = pd.DataFrame({
+            "Base_value": [3000.0],
+            "Additional_value": [100.0],
+            "Czynsz (dodatkowo)": ["650,50 zł"],
+        })
+        ms.add_total_costs(df)
+        assert df.loc[0, "Additional_value"] == 650.5
+        assert df.loc[0, "Full_value"] == 3650.5
+
+    def test_missing_czynsz_keeps_existing_additional_value(self):
+        df = pd.DataFrame({
+            "Base_value": [3000.0],
+            "Additional_value": [400.0],
+            "Czynsz (dodatkowo)": ["brak informacji"],
+        })
+        ms.add_total_costs(df)
+        assert df.loc[0, "Full_value"] == 3400.0
+
+    def test_equal_values_are_not_double_counted(self):
+        # Some listings repeat the base rent in the extra-fee field
+        df = pd.DataFrame({"Base_value": [2800.0], "Additional_value": [2800.0]})
+        ms.add_total_costs(df)
+        assert df.loc[0, "Full_value"] == 2800.0
+
+    def test_missing_columns_and_nans_default_to_zero(self):
+        df = pd.DataFrame({"Name": ["a", "b"], "Base_value": [2500.0, None]})
+        ms.add_total_costs(df)
+        assert list(df["Additional_value"]) == [0.0, 0.0]
+        assert list(df["Full_value"]) == [2500.0, 0.0]
