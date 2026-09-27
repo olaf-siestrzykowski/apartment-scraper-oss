@@ -8,31 +8,27 @@ from oauth2client.service_account import ServiceAccountCredentials
 import re
 import os
 import sys
-from playwright.sync_api import Playwright, sync_playwright, expect
+from playwright.sync_api import Playwright, sync_playwright
 import time
 import random
-import logging
 from datetime import timedelta
 from pathlib import Path
 import json
-from typing import Optional, Dict, Any, List, Tuple
-from urllib.parse import urljoin
+from typing import Optional, Dict, Any, List
 import requests
 
-# Import enhanced logging configuration
+import logging
+
 from logging_config import (
     setup_comprehensive_logging,
     log_extraction_attempt,
-    log_selector_attempt,
-    log_extraction_result,
-    log_batch_summary,
-    log_session_summary,
-    DebugHTMLHandler
+    log_extraction_result
 )
 
-# Configure enhanced logging with HTML debugging
-logger, debug_handler = setup_comprehensive_logging(include_html_debugging=True)
-logger.info(f"🚀 Starting Web Scraper Session")
+# setup_comprehensive_logging() (called from main) configures this same logger and
+# creates the log/debug folders - importing the module has no side effects.
+logger = logging.getLogger("logging_config")
+debug_handler = None
 
 
 class ProgressTracker:
@@ -106,9 +102,6 @@ class ProgressTracker:
             logger.info(f"✅ {self.description} complete: {self.completed}/{self.total} items in {elapsed_str}")
 
 
-# Global progress tracker instance
-extraction_progress: Optional[ProgressTracker] = None
-
 def load_profiles() -> dict:
     """Load search profiles from profiles.json next to this script.
 
@@ -127,44 +120,33 @@ def load_profiles() -> dict:
     return {p["name"]: p for p in data["profiles"]}
 
 
-_ALL_PROFILES = load_profiles()
+def build_arg_parser(profile_names: List[str]) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Scrape flats from OLX/Otodom")
+    parser.add_argument("--search", choices=profile_names, default=profile_names[0],
+                        help="Search profile to run (defined in profiles.json)")
+    parser.add_argument("--reextract", action="store_true",
+                        help="Re-extract data from saved HTML files instead of scraping")
+    parser.add_argument("--html-folder", type=str, default=None,
+                        help="Folder containing saved HTML files for re-extraction (default: today's folder)")
+    parser.add_argument("--pickle-file", type=str, default=None,
+                        help="Pickle file to load/update for re-extraction or distance calculation")
+    parser.add_argument("--force-all", action="store_true",
+                        help="Force re-extraction even for offers that already have data")
+    parser.add_argument("--calc-distance", action="store_true",
+                        help="Calculate distance from apartments to office")
+    parser.add_argument("--office-address", type=str, default=None,
+                        help="Override office address for distance calculation")
+    parser.add_argument("--transport-mode",
+                        choices=["driving-car", "cycling-regular", "foot-walking", "public-transport"],
+                        default=None, help="Transport mode (overrides config sheet; default: foot-walking)")
+    return parser
 
-parser = argparse.ArgumentParser(description="Scrape flats from OLX/Otodom")
-parser.add_argument("--search", choices=list(_ALL_PROFILES.keys()),
-                    default=list(_ALL_PROFILES.keys())[0],
-                    help="Search profile to run (defined in profiles.json)")
-parser.add_argument("--reextract", action="store_true",
-                    help="Re-extract data from saved HTML files instead of scraping")
-parser.add_argument("--html-folder", type=str, default=None,
-                    help="Folder containing saved HTML files for re-extraction (default: today's folder)")
-parser.add_argument("--pickle-file", type=str, default=None,
-                    help="Pickle file to load/update for re-extraction or distance calculation")
-parser.add_argument("--force-all", action="store_true",
-                    help="Force re-extraction even for offers that already have data")
-parser.add_argument("--calc-distance", action="store_true",
-                    help="Calculate distance from apartments to office")
-parser.add_argument("--office-address", type=str, default=None,
-                    help="Override office address for distance calculation")
-parser.add_argument("--transport-mode", choices=["driving-car", "cycling-regular", "foot-walking", "public-transport"],
-                    default=None, help="Transport mode (overrides config sheet; default: foot-walking)")
-
-# Only parse arguments if running as main script, not when imported as a module
-if __name__ == "__main__":
-    args = parser.parse_args()
-    search = args.search
-else:
-    # Default values when imported as a module
-    search = list(_ALL_PROFILES.keys())[0]
-    args = argparse.Namespace(reextract=False, html_folder=None, pickle_file=None, force_all=False,
-                              calc_distance=False, office_address=None, transport_mode=None)
 
 # ============================================================================
 # CONFIGURATION - CREDENTIALS AND API KEYS (Use environment variables!)
 # ============================================================================
 # OpenRouteService API key for distance calculations
 API_KEY = os.environ.get('OPENROUTESERVICE_API_KEY')
-if not API_KEY:
-    logger.warning("⚠️  OPENROUTESERVICE_API_KEY not set in environment. Distance calculation will fail.")
 
 # Google Sheets credentials path - resolved relative to this script file
 GOOGLE_CREDS_PATH = os.environ.get(
@@ -172,20 +154,38 @@ GOOGLE_CREDS_PATH = os.environ.get(
     str(Path(__file__).parent / 'google-credentials.json')
 )
 
-# Load active profile from profiles.json
-_profile   = _ALL_PROFILES[search]
-olx_url    = _profile["olx_url"]
-otodom_url = _profile["otodom_url"]
-sheet_id   = _profile["sheet_id"]
-origin     = _profile["origin_address"]
-search_city = _profile["city"]
+# Active run configuration - filled in by configure() before run() / re-extraction.
+args = argparse.Namespace(reextract=False, html_folder=None, pickle_file=None, force_all=False,
+                          calc_distance=False, office_address=None, transport_mode=None)
+search: Optional[str] = None
+olx_url: Optional[str] = None
+otodom_url: Optional[str] = None
+sheet_id: Optional[str] = None
+origin: Optional[str] = None
+search_city: Optional[str] = None
+_profile: Dict[str, Any] = {}
 
 offers_df = pd.DataFrame()
 # Global set to track seen offers and prevent duplicates
 seen_offers = set()
 # Holds config loaded from the "config" sheet at runtime (populated by run())
 _run_config: dict = {}
-logger.info(f'Search configuration: {search} (city: {search_city}, office: {origin})')
+
+
+def configure(cli_args: argparse.Namespace, profile: Dict[str, Any]) -> None:
+    """Set the active search profile and CLI options for this process."""
+    global args, _profile, search, olx_url, otodom_url, sheet_id, origin, search_city
+    args = cli_args
+    _profile = profile
+    search = profile["name"]
+    olx_url = profile["olx_url"]
+    otodom_url = profile["otodom_url"]
+    sheet_id = profile["sheet_id"]
+    origin = profile["origin_address"]
+    search_city = profile["city"]
+    if not API_KEY:
+        logger.warning("⚠️  OPENROUTESERVICE_API_KEY not set in environment. Distance calculation will fail.")
+    logger.info(f'Search configuration: {search} (city: {search_city}, office: {origin})')
 
 
 # ============================================================================
@@ -194,18 +194,6 @@ logger.info(f'Search configuration: {search} (city: {search_city}, office: {orig
 # Rate limiting delays
 NOMINATIM_DELAY = 1.1  # Nominatim requires 1 req/sec
 ORS_DELAY = 0.3
-
-# Known Warsaw street names for validation
-KNOWN_WARSAW_STREETS = {
-    'puławska', 'marszałkowska', 'jerozolimskie', 'aleje jerozolimskie',
-    'świętokrzyska', 'nowy świat', 'krakowskie przedmieście', 'grójecka',
-    'modlińska', 'grochowska', 'targowa', 'jagiellońska', 'solidarności',
-    'jana pawła', 'wolska', 'górczewska', 'powstańców śląskich',
-    'kasprowicza', 'broniewskiego', 'słowackiego', 'mickiewicza',
-    'wilsona', 'popiełuszki', 'żeromskiego', 'conrada', 'reymonta',
-    'sikorskiego', 'powsińska', 'sobieskiego', 'belwederska',
-}
-
 
 def geocode_nominatim(address: str) -> Optional[Dict[str, Any]]:
     """Geocode address using Nominatim (OSM) - free, no API key needed"""
@@ -321,16 +309,6 @@ CITY_BOUNDS = {
 }
 
 
-def is_within_warsaw_bounds(coords: Dict[str, Any]) -> bool:
-    """Check if coordinates are within Warsaw metropolitan area"""
-    if not coords:
-        return False
-    lat = coords.get("lat", 0)
-    lon = coords.get("lon", 0)
-    return (WARSAW_BOUNDS["lat_min"] <= lat <= WARSAW_BOUNDS["lat_max"] and
-            WARSAW_BOUNDS["lon_min"] <= lon <= WARSAW_BOUNDS["lon_max"])
-
-
 # Common Polish words that are NOT street names (false positives)
 STREET_BLACKLIST = {
     # Verbs and common phrases
@@ -372,7 +350,6 @@ def extract_street_from_text(text: str) -> Optional[str]:
         matches = re.finditer(pattern, text, re.IGNORECASE)
         for match in matches:
             street_name = match.group(1).strip()
-            number = match.group(2) if match.lastindex >= 2 and match.group(2) else ""
 
             if len(street_name) < 4:
                 continue
@@ -577,7 +554,7 @@ def calculate_distances_for_offers(df: pd.DataFrame, office_address: str = None,
     # Statistics
     valid_distances = df["Distance_km"].dropna()
     if not valid_distances.empty:
-        logger.info(f"📈 Distance statistics:")
+        logger.info("📈 Distance statistics:")
         logger.info(f"   Range: {valid_distances.min():.2f} - {valid_distances.max():.2f} km")
         logger.info(f"   Average: {valid_distances.mean():.2f} km")
         logger.info(f"   Calculated for: {len(valid_distances)}/{len(df)} offers")
@@ -1651,265 +1628,6 @@ def apply_custom_fields_extraction(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def batch_update_sheets(batch_data: list, sheet_id: str, start_row: int = 2):
-    """
-    Update Google Sheets with batch data to avoid repeated API calls.
-    """
-    try:
-        json_creds = GOOGLE_CREDS_PATH
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        creds = ServiceAccountCredentials.from_json_keyfile_name(json_creds, scope)
-        client = gspread.authorize(creds)
-
-        spreadsheet = client.open_by_key(sheet_id)
-        ws = spreadsheet.worksheet("apartment list")
-
-        # Calculate range based on data
-        end_row = start_row + len(batch_data) - 1
-        range_name = f'B{start_row}:BJ{end_row}'  # Adjust column range as needed
-
-        ws.update(values=batch_data, range_name=range_name)
-        logger.info(f"✅ Updated {len(batch_data)} rows to sheets (rows {start_row}-{end_row})")
-
-    except Exception as e:
-        logger.error(f"❌ Failed to update batch to sheets: {e}")
-
-
-def prioritize_offers_by_value(offers_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Sort offers by value to prioritize cheaper ones for faster processing.
-    """
-    if offers_df.empty:
-        return offers_df
-
-    # Calculate value per square meter for better comparison
-    offers_df['price_per_sqm'] = offers_df.apply(
-        lambda row: row['Base_value'] / row['Area'] if row['Area'] > 0 else row['Base_value'],
-        axis=1
-    )
-
-    # Sort by: 1) Price per sqm, 2) Total price, 3) Area (descending for same price)
-    sorted_df = offers_df.sort_values([
-        'price_per_sqm',
-        'Base_value',
-        'Area'
-    ], ascending=[True, True, False]).reset_index(drop=True)
-
-    logger.info(f"📊 Sorted {len(sorted_df)} offers by value (cheapest first)")
-    return sorted_df
-
-
-def enhanced_cost_extraction(offers_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Apply smart cost extraction to all offers with descriptions.
-    """
-    logger.info("💰 Starting enhanced cost extraction from descriptions...")
-
-    updated_count = 0
-
-    for index, row in offers_df.iterrows():
-        if pd.isna(row.get('Description')) or not row.get('Description'):
-            continue
-
-        cost_info = extract_full_cost_from_description(row['Description'], row['Base_value'])
-
-        # Update additional costs if found and current additional_value is 0
-        if cost_info['additional_costs'] > 0 and row.get('Additional_value', 0) == 0:
-            offers_df.at[index, 'Additional_value'] = cost_info['additional_costs']
-            offers_df.at[index, 'Full_value'] = cost_info['full_cost']
-            offers_df.at[index, 'Cost_Details_Extracted'] = '; '.join(cost_info['cost_details'])
-            updated_count += 1
-
-            logger.debug(f"Updated offer {index}: {cost_info['cost_details']}")
-
-    logger.info(f"✅ Enhanced cost extraction completed: {updated_count} offers updated")
-    return offers_df
-
-
-# MODIFIED BATCH PROCESSING FOR DETAILED EXTRACTION
-def process_batch_with_updates(mixed_extraction_plan, batch_start, batch_size,
-                               page_otodom, page_olx, sheet_id, progress_tracker=None):
-    """
-    Process a batch and immediately update sheets with results.
-    """
-    batch_end = min(batch_start + batch_size, len(mixed_extraction_plan))
-    current_batch = mixed_extraction_plan[batch_start:batch_end]
-
-    logger.info(f"🔄 Processing batch {batch_start // batch_size + 1}: items {batch_start + 1}-{batch_end}")
-
-    batch_results = []
-    processed_indices = []
-
-    for i, (source, index) in enumerate(current_batch):
-        item_start_time = time.time()
-        try:
-            if source == 'otodom':
-                success = extract_otodom_details(page_otodom, index, batch_start + i + 1,
-                                                 len(mixed_extraction_plan))
-            else:
-                success = extract_olx_details(page_olx, index, batch_start + i + 1,
-                                              len(mixed_extraction_plan))
-
-            if success:
-                row_data = offers_df.loc[index].tolist()
-                batch_results.append(row_data)
-                processed_indices.append(index)
-
-                logger.info(f"✅ Successfully processed {source} offer {index}")
-            else:
-                logger.warning(f"⚠️ Failed to process {source} offer {index}")
-
-            # Update progress tracker
-            if progress_tracker:
-                progress_tracker.update(item_start_time)
-
-            # Variable delay between requests
-            delay = random.uniform(2.0, 6.0)
-            time.sleep(delay)
-
-        except Exception as e:
-            logger.error(f"❌ Error processing {source} offer {index}: {e}")
-            # Still update progress on error
-            if progress_tracker:
-                progress_tracker.update(item_start_time)
-            continue
-
-    # Update sheets with batch results
-    if batch_results:
-        try:
-            # Calculate the starting row for this batch in sheets
-            sheet_start_row = batch_start + 2  # +2 because sheet starts at row 2
-            batch_update_sheets(batch_results, sheet_id, sheet_start_row)
-
-            logger.info(f"📊 Batch {batch_start // batch_size + 1} completed: "
-                        f"{len(batch_results)}/{len(current_batch)} offers processed and updated")
-        except Exception as e:
-            logger.error(f"❌ Failed to update batch results to sheets: {e}")
-
-    return processed_indices
-
-
-# ADD THIS TO YOUR MAIN SCRAPING LOOP (replace the existing batch processing)
-def improved_mixed_extraction(offers_df, sheet_id):
-    """
-    Improved mixed extraction with immediate batch updates and cost analysis.
-    """
-
-    # Step 1: Enhance cost extraction from existing descriptions
-    offers_df = enhanced_cost_extraction(offers_df)
-
-    # Step 2: Sort offers by value (cheapest first)
-    offers_df = prioritize_offers_by_value(offers_df)
-
-    # Step 3: Prepare extraction plan
-    offers_otodom = offers_df[offers_df["Link"].str.contains("otodom.pl", na=False, regex=False)].copy()
-    offers_olx = offers_df[offers_df["Link"].str.contains("olx.pl", na=False, regex=False)].copy()
-
-    # Create mixed plan prioritizing cheapest offers
-    mixed_extraction_plan = []
-    otodom_indices = offers_otodom.index.tolist()
-    olx_indices = offers_olx.index.tolist()
-
-    for i in range(max(len(otodom_indices), len(olx_indices))):
-        if i < len(otodom_indices):
-            mixed_extraction_plan.append(('otodom', otodom_indices[i]))
-        if i < len(olx_indices):
-            mixed_extraction_plan.append(('olx', olx_indices[i]))
-
-    logger.info(
-        f"🔀 Mixed extraction plan: {len(offers_otodom)} Otodom + {len(offers_olx)} OLX = {len(mixed_extraction_plan)} total")
-
-    # Step 4: Process in batches with immediate updates
-    BATCH_SIZE = 10  # Reduced for faster updates
-    BATCH_BREAK = 20  # Reduced break time
-
-    # Create pages for both sources
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
-            headless=True,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--disable-dev-shm-usage',
-                '--no-sandbox',
-            ]
-        )
-        context = browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            locale='pl-PL',
-            timezone_id='Europe/Warsaw',
-        )
-        # Stealth mode: hide webdriver detection
-        context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-            Object.defineProperty(navigator, 'languages', {get: () => ['pl-PL', 'pl', 'en-US', 'en']});
-            window.chrome = {runtime: {}};
-        """)
-        page_otodom = context.new_page()
-        page_olx = context.new_page()
-
-        all_processed = []
-        processed_offers = improved_mixed_extraction(offers_df, sheet_id)
-
-        browser.close()
-
-    logger.info(f"✅ Mixed extraction completed: {len(all_processed)} offers processed")
-    return all_processed
-
-
-# ADDITIONAL REGEX PATTERNS FOR BETTER COST EXTRACTION
-POLISH_COST_PATTERNS = {
-    'utilities': [
-        r'media:?\s*(?:około|ok\.?)?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)',
-        r'opłaty\s*(?:za\s*)?media:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)',
-        r'rachunki:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)',
-    ],
-    'admin_fee': [
-        r'czynsz\s*administracyjny:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)',
-        r'opłata\s*administracyjna:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)',
-        r'administracja:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)',
-    ],
-    'parking': [
-        r'(?:miejsce\s*)?parking(?:owe)?:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)',
-        r'garaż:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)',
-        r'miejsce\s*garażowe:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)',
-    ],
-    'deposit': [
-        r'kaucja\s*(?:zwrotna)?:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)',
-        r'depozyt:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)',
-        r'zabezpieczenie:?\s*(\d+(?:[.,]\d+)?)\s*(?:zł|pln)',
-    ]
-}
-
-
-def extract_detailed_costs(description: str) -> Dict[str, float]:
-    """
-    Extract detailed cost breakdown using comprehensive regex patterns.
-    """
-    if not description:
-        return {}
-
-    desc_lower = description.lower()
-    costs = {}
-
-    for cost_category, patterns in POLISH_COST_PATTERNS.items():
-        total_cost = 0
-        pattern_pairs = [(p, cost_category) for p in patterns]
-        for _, m in _iter_cost_matches(pattern_pairs, desc_lower):
-            try:
-                total_cost += float(m.group(1).replace(',', '.'))
-            except ValueError:
-                continue
-
-        if total_cost > 0:
-            costs[cost_category] = total_cost
-
-    return costs
-
-
-
 def find_element_by_selectors(soup, selectors, attribute=None):
     """Try multiple selectors until one returns a result"""
     for selector in selectors:
@@ -1933,7 +1651,7 @@ def find_element_by_selectors(soup, selectors, attribute=None):
                     if attribute:
                         return element.get(attribute)
                     return element
-        except Exception as e:
+        except Exception:
             continue
     return None
 
@@ -1944,7 +1662,7 @@ def find_elements_by_selectors(soup, selectors):
             elements = soup.select(selector)
             if elements:
                 return elements
-        except Exception as e:
+        except Exception:
             continue
     return []
 
@@ -2014,28 +1732,6 @@ def is_duplicate_offer(title: str, price: int, link: str = "") -> bool:
             seen_offers.add(f"{location_key}_{similar_count}")
     
     return False
-
-def validate_olx_link(link: str) -> str:
-    """Validate and fix OLX link format"""
-    if not link:
-        return ""
-    
-    # Clean up the link
-    link = link.strip()
-    
-    # Handle relative URLs
-    if link.startswith('/'):
-        link = f"https://www.olx.pl{link}"
-    
-    # Ensure proper protocol
-    if not link.startswith('http'):
-        link = f"https://{link}"
-    
-    # Validate it's actually an OLX link and contains required parts
-    if 'olx.pl' in link and '/oferta/' in link:
-        return link
-    
-    return ""
 
 def validate_offer_data(offer_dict: dict, source: str = "Unknown") -> tuple[bool, list]:
     """Validate scraped offer data and return validation status with issues list"""
@@ -2138,7 +1834,7 @@ def log_scraping_stats():
         )
 
         # --- LOGGING ---
-        logger.info(f"📊 SCRAPING STATISTICS:")
+        logger.info("📊 SCRAPING STATISTICS:")
         logger.info(f"   📁 Total offers: {total_offers}")
         logger.info(f"   📱 OLX offers: {olx_offers} ({(olx_offers/total_offers*100):.1f}%)")
         logger.info(f"   🏠 Otodom offers: {otodom_offers} ({(otodom_offers/total_offers*100):.1f}%)")
@@ -2149,7 +1845,42 @@ def log_scraping_stats():
         logger.error(f"❌ Failed to generate scraping statistics: {e}")
 
 
-# Add a global function to save intermediate data to sheets
+def add_total_costs(df: pd.DataFrame) -> pd.DataFrame:
+    """Derive Additional_value and Full_value (monthly total) in place.
+
+    - "Czynsz (dodatkowo)" (Otodom's extra rent field, free text) is parsed to a number
+      and, when present, overrides Additional_value
+    - Full_value = Base_value + Additional_value, except when both are equal: some
+      listings repeat the base rent in the extra-fee field, so the sum would double it
+      (known limitation - a genuine fee equal to the rent is also collapsed, see ISSUES.md)
+    """
+    if "Czynsz (dodatkowo)" in df.columns:
+        df["Czynsz (dodatkowo) value"] = (
+            df["Czynsz (dodatkowo)"].astype(str)
+            .str.extract(r"(\d+(?:[\.,]\d+)?)")[0]
+            .fillna("0")
+            .str.replace(",", ".", regex=False)
+            .astype(float)
+        )
+    else:
+        df["Czynsz (dodatkowo) value"] = 0.0
+
+    if "Additional_value" not in df.columns:
+        df["Additional_value"] = 0.0
+    df["Additional_value"] = np.where(
+        df["Czynsz (dodatkowo) value"] == 0.0,
+        df["Additional_value"],
+        df["Czynsz (dodatkowo) value"],
+    )
+
+    if "Base_value" not in df.columns:
+        df["Base_value"] = 0.0
+    base = df["Base_value"].fillna(0)
+    additional = df["Additional_value"].fillna(0)
+    df["Full_value"] = np.where(additional == base, base, base + additional)
+    return df
+
+
 def save_basic_data_to_sheets():
     """Save basic scraped data to sheets before extracting details"""
     global offers_df
@@ -2294,8 +2025,6 @@ def scroll_alot(page):
     page.mouse.wheel(10000, 10000)
     time.sleep(0.2)
     page.mouse.wheel(10000, 10000)
-
-# WORKING REPLACEMENT - Replace your scrape_otodom function with this
 
 def parse_polish_date(date_text: str) -> str:
     """
@@ -2636,239 +2365,6 @@ def scrape_otodom_working(html_content):
     logger.info("Otodom stage totals (s): " + ", ".join(f"{k}={v:.3f}" for k, v in slow_stages))
     logger.info(f"Otodom summary: Added={added_count}, Skipped={skipped_count}")
 
-    return added_count
-
-def parse_price_to_float(price_text):
-    """
-    Parse price text into a float handling formats like:
-      - '2 700,50 zł'
-      - '2.700,50 zł'
-      - '1 999.99 zł'
-      - '3.200 zł'
-      - '1999 zł'
-    Returns float (0.0 if parsing fails).
-    """
-    if not price_text:
-        return 0.0
-
-    # Extract the contiguous block with digits, spaces, dots and commas (and NBSP)
-    m = re.search(r'[\d\.\,\s\u00A0]+', price_text)
-    if not m:
-        return 0.0
-
-    raw = m.group(0).strip()
-    # normalize non-breaking space
-    raw = raw.replace("\u00A0", " ")
-
-    # remove surrounding spaces
-    raw = raw.strip()
-
-    # Remove inner spaces (thousand separator as space)
-    s = raw.replace(" ", "")
-
-    # CASE 1: both '.' and ',' present
-    # Most common: '.' as thousands separator and ',' as decimal (e.g. "2.700,50")
-    if '.' in s and ',' in s:
-        # decide which is the decimal separator by position (the last separator is usually the decimal)
-        if s.rfind(',') > s.rfind('.'):
-            # comma as decimal, dots as thousands -> remove dots, replace comma with dot
-            normalized = s.replace('.', '').replace(',', '.')
-        else:
-            # dot appears after last comma -> dot likely decimal, comma thousands - remove commas
-            normalized = s.replace(',', '')
-    # CASE 2: only comma present -> treat comma as decimal separator (Polish style)
-    elif ',' in s:
-        normalized = s.replace(',', '.')
-    # CASE 3: only dot present -> ambiguous: could be thousands or decimal
-    elif '.' in s:
-        # If there's exactly one dot and exactly 3 digits after it, treat it as thousand separator
-        parts = s.split('.')
-        if len(parts) == 2 and len(parts[1]) == 3:
-            normalized = ''.join(parts)  # remove dot
-        else:
-            # otherwise treat dot as decimal separator (e.g., '1999.99')
-            normalized = s
-    else:
-        normalized = s
-
-    # Final cleanup: remove any non digit / dot characters (shouldn't be any left)
-    normalized = re.sub(r'[^\d\.]', '', normalized)
-
-    # Convert to float
-    try:
-        return float(normalized) if normalized else 0.0
-    except ValueError:
-        return 0.0
-
-def extract_detailed_property_info(soup, selectors):
-    """
-    Extract detailed property information using OTODOM_DETAIL_SELECTORS
-    """
-    details = {}
-
-    try:
-        # Extract title
-        title = extract_with_fallback_selectors(soup, selectors.get('title', []))
-        if title:
-            details['title'] = title
-
-        # Extract price
-        price_text = extract_with_fallback_selectors(soup, selectors.get('price', []))
-        if price_text:
-            price_match = re.search(r'([\d\s]+)\s*zł', price_text)
-            if price_match:
-                details['price'] = int("".join(re.findall(r"\d+", price_match.group(1))))
-
-        # Extract address
-        address = extract_with_fallback_selectors(soup, selectors.get('address', []))
-        if address:
-            details['address'] = address
-
-        # Extract property details from item grid
-        details_container = None
-        for selector in selectors.get('details_container', []):
-            details_container = soup.select_one(selector)
-            if details_container:
-                break
-
-        if details_container:
-            # Get all property detail items
-            item_grids = details_container.select('div[class*="css-1xw0jqp"]')
-
-            for item in item_grids:
-                # Extract label and value pairs
-                label_elem = item.select_one('div[class*="css-1okys8k"]')
-                if label_elem:
-                    label = label_elem.get_text(strip=True)
-
-                    # Get the value (usually the next sibling or in a specific container)
-                    value_elem = item.find('div', class_=lambda x: x and 'css-axw7ok' in x)
-                    if not value_elem:
-                        # Try alternative value extraction
-                        all_divs = item.find_all('div')
-                        for div in all_divs:
-                            if div != label_elem and div.get_text(strip=True):
-                                value_elem = div
-                                break
-
-                    if value_elem:
-                        value = value_elem.get_text(strip=True)
-                        details[f'detail_{label.lower().replace(" ", "_")}'] = value
-
-        # Extract features from accordion sections
-        accordion_buttons = soup.select('button[class*="css-1u6lqhc"]')
-        for button in accordion_buttons:
-            section_name = button.get_text(strip=True)
-            # Find corresponding content
-            content_div = button.find_next_sibling('div')
-            if content_div:
-                features = []
-                feature_spans = content_div.select('span[class*="css-axw7ok"]')
-                for span in feature_spans:
-                    feature_text = span.get_text(strip=True)
-                    if feature_text:
-                        features.append(feature_text)
-                if features:
-                    details[f'features_{section_name.lower().replace(" ", "_")}'] = features
-
-    except Exception as e:
-        logger.error(f"Error extracting detailed property info: {e}")
-
-    return details
-
-# DEBUG VERSION - Add this function to identify exactly what's failing
-
-def extract_offer_details_debug(offer, offer_index=0):
-    logger.info(f"🔍 DEBUGGING OFFER {offer_index + 1}")
-    logger.info(f"Offer HTML preview: {str(offer)[:200]}...")
-
-    logger.info("🏷️ Attempting title extraction...")
-    # Step 2 logic starts here:
-
-    # ​​ Try the reliable anchor first
-    title_tag = offer.select_one('a[data-cy="listing-item-link"]')
-    if title_tag:
-        title = title_tag.get_text(strip=True)
-        link = title_tag.get("href", None)
-        if link and link.startswith("/"):
-            link = f"https://www.otodom.pl{link}"
-    else:
-        # ​​ Fallback for promoted listings
-        promo_tag = offer.select_one('[data-cy="search.listing.promoted.title"]')
-        title = promo_tag.get_text(strip=True) if promo_tag else None
-        link = None
-
-    if not title:
-        logger.warning(f"   ❌ TITLE NOT FOUND for offer {offer_index + 1}")
-        return None
-
-    logger.info(f"   ✅ Title found: {title}")
-
-    logger.info("🔗 Attempting link extraction...")
-    if not link:
-        link_elem = offer.select_one('a[data-cy="listing-item-link"]')
-        link = link_elem.get("href", None) if link_elem else None
-        if link and link.startswith("/"):
-            link = f"https://www.otodom.pl{link}"
-
-    if not link:
-        logger.warning(f"   ❌ LINK NOT FOUND for offer {offer_index + 1}")
-        return None
-
-    logger.info(f"   Link accepted: {link}")
-
-    # Continue with price extraction, etc.
-    ...
-
-# UPDATED SCRAPE_OTODOM FUNCTION WITH DEBUG
-def scrape_otodom_debug(html_content):
-    global offers_df
-    if offers_df is None:
-        offers_df = pd.DataFrame()
-
-    if not html_content or len(html_content) < 1000:
-        logger.warning("HTML content too short, likely failed page load")
-        return 0
-
-    soup = BeautifulSoup(html_content, "html.parser")
-    offers = soup.select(
-        'article[data-cy="listing-item"], '
-        'li[data-cy="listing-item"], '
-        'div[data-cy="listing-item"], '
-        'div[data-cy="search.listing.promoted"]'
-    )
-
-    if not offers:
-        logger.warning("No offers found on page")
-        return 0
-
-    logger.info(f"🚀 Starting to process {len(offers)} offers with DEBUG extraction...")
-
-    added_count = skipped_count = 0
-    debug_limit = min(5, len(offers))
-
-    for i, offer in enumerate(offers[:debug_limit]):
-        try:
-            logger.info("\n" + "=" * 60)
-            logger.debug(f"DEBUGGING OFFER {i+1} - {offer.name} with class {offer.get('class')}")
-            offer_data = extract_offer_details_debug(offer, i)
-
-            if not offer_data:
-                skipped_count += 1
-                logger.warning(f"❌ Offer {i+1} skipped - extraction returned None")
-                continue
-
-            offer_df = pd.DataFrame([offer_data])
-            offers_df = pd.concat([offers_df, offer_df], ignore_index=True)
-            added_count += 1
-
-            logger.info(f"✅ Successfully added offer {i+1}")
-
-        except Exception as e:
-            logger.error(f"❌ Error processing offer {i+1}: {e}")
-            skipped_count += 1
-
-    logger.info(f"\n🎯 DEBUG SUMMARY: Added={added_count}, Skipped={skipped_count} out of {debug_limit} tested")
     return added_count
 
 def extract_price_from_text(price_text: str) -> float:
@@ -3535,55 +3031,6 @@ def extract_phone_number_with_click(page, contact_container_selector=None):
         logger.error(f"❌ Error during phone extraction process: {e}")
         return f"Phone extraction error: {str(e)}"
 
-def save_html_to_file(html_content, index, url, export_folder="exports/html"):
-    """
-    Save HTML content to a file in the export folder AND debug handler
-    """
-    try:
-        # Create export folder if it doesn't exist
-        if not os.path.exists(export_folder):
-            os.makedirs(export_folder)
-
-        # Create a safe filename from the URL
-        url_part = url.split('/')[-1] if url.split('/')[-1] else f"offer_{index}"
-        safe_filename = re.sub(r'[^\w\-_\.]', '_', url_part)
-        if not safe_filename.endswith('.html'):
-            safe_filename += '.html'
-
-        # Add index prefix for uniqueness and limit filename length
-        filename = f"olx_{index}_{safe_filename}"
-        if len(filename) > 200:
-            filename = f"olx_{index}_offer.html"
-
-        filepath = os.path.join(export_folder, filename)
-
-        # Save HTML content to exports folder
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(html_content)
-
-        logger.debug(f"💾 Saved HTML for offer {index} to {filepath} ({len(html_content)} bytes)")
-        
-        # Also save to debug handler if available
-        if debug_handler:
-            debug_path = debug_handler.save_html_for_issue(
-                html_content=html_content,
-                issue_type="offer_snapshot",
-                offer_index=index,
-                url=url,
-                metadata={"filename": filename, "size_bytes": len(html_content)}
-            )
-            if debug_path:
-                logger.debug(f"🔍 Debug copy saved to: {debug_path}")
-        
-        return filepath
-
-    except Exception as e:
-        logger.error(f"Failed to save HTML for offer {index}: {e}")
-        logger.error(f"URL: {url}")
-        logger.error(f"Export folder: {export_folder}")
-        return None
-
-
 def extract_olx_details(page, index, current_num, total_num, is_retry=False):
     """Extract detailed information from a single OLX offer page"""
 
@@ -3699,7 +3146,7 @@ def extract_olx_details(page, index, current_num, total_num, is_retry=False):
             logger.debug(f"✅ Title extracted: {title_text[:60]}")
         else:
             missing_fields.append("Title")
-            logger.debug(f"❌ Title not found")
+            logger.debug("❌ Title not found")
 
         # Extract price using selectors
         price_element = find_element_by_selectors(soup, OLX_SELECTORS['price'])
@@ -3710,7 +3157,7 @@ def extract_olx_details(page, index, current_num, total_num, is_retry=False):
             logger.debug(f"✅ Price extracted: {price_text}")
         else:
             missing_fields.append("Price")
-            logger.debug(f"❌ Price not found")
+            logger.debug("❌ Price not found")
 
         # Extract area using selectors
         area_element = find_element_by_selectors(soup, OLX_SELECTORS['area'])
@@ -3721,7 +3168,7 @@ def extract_olx_details(page, index, current_num, total_num, is_retry=False):
             logger.debug(f"✅ Area extracted: {area_text}")
         else:
             missing_fields.append("Area")
-            logger.debug(f"❌ Area not found")
+            logger.debug("❌ Area not found")
 
         # Extract detailed data using existing OLX extraction logic
         # Try multiple selectors for description - CSS classes may change
@@ -3743,7 +3190,7 @@ def extract_olx_details(page, index, current_num, total_num, is_retry=False):
             logger.debug(f"✅ Description extracted ({len(opis)} chars)")
         else:
             missing_fields.append("Description")
-            logger.debug(f"❌ Description not found")
+            logger.debug("❌ Description not found")
 
         # Extract location using selectors first, then fallback
         location_element = find_element_by_selectors(soup, OLX_SELECTORS['address'])
@@ -3782,7 +3229,7 @@ def extract_olx_details(page, index, current_num, total_num, is_retry=False):
 
             if location == "No Location":
                 missing_fields.append("Location")
-                logger.debug(f"❌ Location not found")
+                logger.debug("❌ Location not found")
 
         trader_tag = soup.find("div", {"data-testid": "seller_card"})
         if not trader_tag:
@@ -3836,7 +3283,7 @@ def extract_olx_details(page, index, current_num, total_num, is_retry=False):
                         data_dict["Type"] = text
                 logger.debug(f"✅ Extracted {len(data_dict)} parameters from fallback container")
             else:
-                logger.debug(f"⚠️ No parameters container found")
+                logger.debug("⚠️ No parameters container found")
 
         for key, value in data_dict.items():
             offers_df.at[index, key] = value
@@ -3878,7 +3325,7 @@ def extract_olx_details(page, index, current_num, total_num, is_retry=False):
         return False
 
 
-def save_html_to_file(html_content, index, url, export_folder="exports/html", file_prefix="offer"):
+def save_html_to_file(html_content, index, url, export_folder="exports/html"):
     """
     Improved HTML-saving function with better error handling and folder structure.
 
@@ -3887,7 +3334,6 @@ def save_html_to_file(html_content, index, url, export_folder="exports/html", fi
         index: Offer index
         url: Source URL
         export_folder: Main export folder
-        file_prefix: Filename prefix (e.g. "olx", "otodom", "listing")
 
     Returns:
         str: Path to the saved file, or None on error
@@ -3942,27 +3388,6 @@ def save_html_to_file(html_content, index, url, export_folder="exports/html", fi
         file_size_kb = len(html_content) / 1024
         logger.info(f"💾 Saved HTML for {source} offer {index}: {filepath.name} ({file_size_kb:.1f} KB)")
 
-        # Also save a copy to the debug handler if available
-        try:
-            from logging_config import debug_handler
-            if debug_handler:
-                debug_metadata = {
-                    "filename": filename,
-                    "size_bytes": len(html_content),
-                    "source": source,
-                    "timestamp": timestamp
-                }
-                debug_path = debug_handler.save_html_for_issue(
-                    html_content=html_content,
-                    issue_type="offer_snapshot",
-                    offer_index=index,
-                    url=url,
-                    metadata=debug_metadata
-                )
-                if debug_path:
-                    logger.debug(f"🔍 Debug copy saved to: {debug_path}")
-        except ImportError:
-            pass  # Debug handler unavailable
         
         return str(filepath)
         
@@ -4167,12 +3592,12 @@ def reextract_from_saved_html(html_folder: str = None, offers_df_input: pd.DataF
 
     # Summary statistics
     logger.info(f"\n{'='*60}")
-    logger.info(f"📊 RE-EXTRACTION SUMMARY")
+    logger.info("📊 RE-EXTRACTION SUMMARY")
     logger.info(f"{'='*60}")
     logger.info(f"✅ Successfully updated: {reextracted_count} offers")
     logger.info(f"⏭️ Skipped (already had data): {skipped_count} offers")
     logger.info(f"❌ Failed to extract: {failed_count} offers")
-    logger.info(f"\n📋 Fields updated (top 20):")
+    logger.info("\n📋 Fields updated (top 20):")
     for field, count in sorted(fields_updated.items(), key=lambda x: -x[1])[:20]:
         logger.info(f"   {field}: {count} times")
     logger.info(f"{'='*60}\n")
@@ -4527,110 +3952,6 @@ def _extract_otodom_from_soup(soup, index: int) -> dict:
         return None
 
 
-def validate_html_content(html_content, min_size=1000, check_404=True):
-    """
-    Validate HTML content before saving it.
-
-    Args:
-        html_content: HTML to validate
-        min_size: Minimum required size in bytes
-        check_404: Whether to check for 404 errors
-
-    Returns:
-        tuple: (is_valid, error_message)
-    """
-    if not html_content:
-        return False, "HTML content is None or empty"
-    
-    if len(html_content) < min_size:
-        return False, f"HTML too short: {len(html_content)} bytes (min: {min_size})"
-    
-    if check_404:
-        lower_html = html_content.lower()
-        # More specific 404 detection patterns
-        is_404 = any([
-            "błąd 404" in lower_html,
-            "error 404" in lower_html,
-            "strona nie istnieje" in lower_html,
-            "ogłoszenie nie istnieje" in lower_html,
-            "nie znaleziono strony" in lower_html,
-        ])
-        if is_404:
-            return False, "Page returned 404 error"
-    
-    # Check for basic HTML tags
-    if "<html" not in html_content.lower() and "<body" not in html_content.lower():
-        return False, "Missing basic HTML structure"
-
-    return True, "Valid HTML"
-
-
-# Example usage in the main script:
-def example_integration():
-    """
-    Example of how to integrate these functions into the main script.
-    """
-
-    # Inside scrape_olx / scrape_otodom - save the listing HTML:
-    def scrape_olx_with_html_save(html_content, page_num=1):
-        # Validate the HTML
-        is_valid, error_msg = validate_html_content(html_content, min_size=5000)
-        if not is_valid:
-            logger.warning(f"⚠️ Invalid listing HTML: {error_msg}")
-            return 0
-
-        # Save the listing page HTML
-        listing_html_path = save_listing_page_html(html_content, page_num, source="olx")
-        if listing_html_path:
-            logger.info(f"✅ Listing HTML saved: {listing_html_path}")
-
-        # Continue parsing as usual...
-        soup = BeautifulSoup(html_content, "html.parser")
-        # ... rest of the code
-
-
-    # Inside extract_olx_details - save the offer HTML:
-    def extract_olx_details_with_html_save(page, index, current_num, total_num):
-        try:
-            offer = offers_df.loc[index]
-            url = offer["Link"]
-
-            # Load the page
-            page.goto(url, timeout=60000, wait_until="load")
-            html = page.inner_html("body")
-
-            # VALIDATE BEFORE SAVING
-            is_valid, error_msg = validate_html_content(html)
-            if not is_valid:
-                logger.warning(f"⚠️ Invalid offer HTML for {index}: {error_msg}")
-                offers_df.at[index, "Scraping_Error"] = error_msg
-                return False
-            
-            # SAVE HTML
-            html_filepath = save_html_to_file(
-                html_content=html,
-                index=index,
-                url=url,
-                file_prefix="olx_detail"
-            )
-
-            if html_filepath:
-                offers_df.at[index, "HTML_File_Path"] = html_filepath
-                logger.debug(f"✅ HTML saved for offer {index}")
-            else:
-                logger.warning(f"⚠️ Failed to save HTML for offer {index}")
-
-            # Continue parsing...
-            soup = BeautifulSoup(html, "html.parser")
-            # ... rest of the code
-            
-        except Exception as e:
-            logger.error(f"❌ Error in extract_olx_details: {e}")
-            return False
-        
-        
-
-
 def run(playwright: Playwright) -> None:
     global offers_df, _run_config
 
@@ -4814,7 +4135,7 @@ def run(playwright: Playwright) -> None:
                         has_listings = True
                         logger.info(f"✅ Found {listing_count} listings via primary selector")
                     else:
-                        logger.debug(f"ℹ️ No listings found via primary selector (data-testid=listing-item)")
+                        logger.debug("ℹ️ No listings found via primary selector (data-testid=listing-item)")
                 except Exception as e:
                     logger.debug(f"ℹ️ Primary selector check failed: {e}")
                 
@@ -4828,7 +4149,7 @@ def run(playwright: Playwright) -> None:
                             listing_count = article_count
                             logger.info(f"✅ Found {article_count} listings via fallback selector (article)")
                         else:
-                            logger.debug(f"ℹ️ No articles found on page")
+                            logger.debug("ℹ️ No articles found on page")
                     except Exception as e:
                         logger.debug(f"ℹ️ Article selector check failed: {e}")
                 
@@ -4842,7 +4163,7 @@ def run(playwright: Playwright) -> None:
                             listing_count = div_count
                             logger.info(f"✅ Found {div_count} potential listings via div selector")
                         else:
-                            logger.debug(f"ℹ️ No divs with 'listing' in class found")
+                            logger.debug("ℹ️ No divs with 'listing' in class found")
                     except Exception as e:
                         logger.debug(f"ℹ️ Div selector check failed: {e}")
                 
@@ -5052,41 +4373,9 @@ def run(playwright: Playwright) -> None:
     logger.info("💾 Saving basic offer data to sheets before extracting details...")
 
     try:
-        if "Czynsz (dodatkowo)" in offers_df.columns:
-            # Force Series selection and convert to string to avoid .str errors
-            czynsz_series = offers_df["Czynsz (dodatkowo)"].astype(str)
+        add_total_costs(offers_df)
 
-            offers_df["Czynsz (dodatkowo) value"] = (
-                czynsz_series
-                .str.extract(r"(\d+(?:[\.,]\d+)?)")[0]  # [0] ensures we select the first match
-                .fillna("0")
-                .str.replace(",", ".", regex=False)
-                .astype(float)
-            )
-        else:
-            offers_df["Czynsz (dodatkowo) value"] = 0.0
-
-        if "Additional_value" not in offers_df.columns:
-            offers_df["Additional_value"] = 0.0
-
-        offers_df["Additional_value"] = np.where(
-            offers_df["Czynsz (dodatkowo) value"] == 0.0,
-            offers_df["Additional_value"],
-            offers_df["Czynsz (dodatkowo) value"]
-        )
-
-        if "Base_value" not in offers_df.columns:
-            offers_df["Base_value"] = 0.0
-
-        # If Additional_value == Base_value → Full_value = Base_value
-        # Otherwise, Full_value = Base_value + Additional_value
-        offers_df["Full_value"] = np.where(
-            offers_df["Additional_value"].fillna(0) == offers_df["Base_value"].fillna(0),
-            offers_df["Base_value"].fillna(0),
-            offers_df["Base_value"].fillna(0) + offers_df["Additional_value"].fillna(0)
-        )
-
-        logger.info(f"✅ Data processing completed successfully")
+        logger.info("✅ Data processing completed successfully")
 
     except Exception as e:
         logger.error(f"❌ Failed to process data: {e}")
@@ -5216,44 +4505,7 @@ def run(playwright: Playwright) -> None:
 
                 # Process data before saving to sheets
                 try:
-                    # Ensure the column exists
-                    if "Czynsz (dodatkowo)" in offers_df.columns:
-                        # Force Series selection and convert to string to avoid .str errors
-                        czynsz_series = offers_df["Czynsz (dodatkowo)"].astype(str)
-
-                        offers_df["Czynsz (dodatkowo) value"] = (
-                            czynsz_series
-                            .str.extract(r"(\d+(?:[\.,]\d+)?)")[0]  # [0] ensures we select the first match
-                            .fillna("0")
-                            .str.replace(",", ".", regex=False)
-                            .astype(float)
-                        )
-                    else:
-                        # If the column is missing, default to zeros
-                        offers_df["Czynsz (dodatkowo) value"] = 0.0
-
-                    # Safely update Additional_value
-                    if "Additional_value" not in offers_df.columns:
-                        offers_df["Additional_value"] = 0.0
-
-                    offers_df["Additional_value"] = np.where(
-                        offers_df["Czynsz (dodatkowo) value"] == 0.0,
-                        offers_df["Additional_value"],
-                        offers_df["Czynsz (dodatkowo) value"]
-                    )
-
-                    # Ensure Base_value column exists before summing
-                    if "Base_value" not in offers_df.columns:
-                        offers_df["Base_value"] = 0.0
-
-                    # Calculate Full_value:
-                    # If Additional_value == Base_value → Full_value = Base_value
-                    # Otherwise, Full_value = Base_value + Additional_value
-                    offers_df["Full_value"] = np.where(
-                        offers_df["Additional_value"].fillna(0) == offers_df["Base_value"].fillna(0),
-                        offers_df["Base_value"].fillna(0),
-                        offers_df["Base_value"].fillna(0) + offers_df["Additional_value"].fillna(0)
-                    )
+                    add_total_costs(offers_df)
 
                     logger.info(f"✅ Batch {batch_count} data processing completed successfully")
 
@@ -5280,44 +4532,7 @@ def run(playwright: Playwright) -> None:
     try:
         # Process data before final save
         try:
-            # Ensure the column exists
-            if "Czynsz (dodatkowo)" in offers_df.columns:
-                # Force Series selection and convert to string to avoid .str errors
-                czynsz_series = offers_df["Czynsz (dodatkowo)"].astype(str)
-
-                offers_df["Czynsz (dodatkowo) value"] = (
-                    czynsz_series
-                    .str.extract(r"(\d+(?:[\.,]\d+)?)")[0]  # [0] ensures we select the first match
-                    .fillna("0")
-                    .str.replace(",", ".", regex=False)
-                    .astype(float)
-                )
-            else:
-                # If the column is missing, default to zeros
-                offers_df["Czynsz (dodatkowo) value"] = 0.0
-
-            # Safely update Additional_value
-            if "Additional_value" not in offers_df.columns:
-                offers_df["Additional_value"] = 0.0
-
-            offers_df["Additional_value"] = np.where(
-                offers_df["Czynsz (dodatkowo) value"] == 0.0,
-                offers_df["Additional_value"],
-                offers_df["Czynsz (dodatkowo) value"]
-            )
-
-            # Ensure Base_value column exists before summing
-            if "Base_value" not in offers_df.columns:
-                offers_df["Base_value"] = 0.0
-
-            # Calculate Full_value:
-            # If Additional_value == Base_value → Full_value = Base_value
-            # Otherwise, Full_value = Base_value + Additional_value
-            offers_df["Full_value"] = np.where(
-                offers_df["Additional_value"].fillna(0) == offers_df["Base_value"].fillna(0),
-                offers_df["Base_value"].fillna(0),
-                offers_df["Base_value"].fillna(0) + offers_df["Additional_value"].fillna(0)
-            )
+            add_total_costs(offers_df)
 
             logger.info(f"✅ Batch {batch_count} data processing completed successfully")
 
@@ -5360,44 +4575,7 @@ def run(playwright: Playwright) -> None:
             try:
                 # Process data before post-retry save
                 try:
-                    # Ensure the column exists
-                    if "Czynsz (dodatkowo)" in offers_df.columns:
-                        # Force Series selection and convert to string to avoid .str errors
-                        czynsz_series = offers_df["Czynsz (dodatkowo)"].astype(str)
-
-                        offers_df["Czynsz (dodatkowo) value"] = (
-                            czynsz_series
-                            .str.extract(r"(\d+(?:[\.,]\d+)?)")[0]  # [0] ensures we select the first match
-                            .fillna("0")
-                            .str.replace(",", ".", regex=False)
-                            .astype(float)
-                        )
-                    else:
-                        # If the column is missing, default to zeros
-                        offers_df["Czynsz (dodatkowo) value"] = 0.0
-
-                    # Safely update Additional_value
-                    if "Additional_value" not in offers_df.columns:
-                        offers_df["Additional_value"] = 0.0
-
-                    offers_df["Additional_value"] = np.where(
-                        offers_df["Czynsz (dodatkowo) value"] == 0.0,
-                        offers_df["Additional_value"],
-                        offers_df["Czynsz (dodatkowo) value"]
-                    )
-
-                    # Ensure Base_value column exists before summing
-                    if "Base_value" not in offers_df.columns:
-                        offers_df["Base_value"] = 0.0
-
-                    # Calculate Full_value:
-                    # If Additional_value == Base_value → Full_value = Base_value
-                    # Otherwise, Full_value = Base_value + Additional_value
-                    offers_df["Full_value"] = np.where(
-                        offers_df["Additional_value"].fillna(0) == offers_df["Base_value"].fillna(0),
-                        offers_df["Base_value"].fillna(0),
-                        offers_df["Base_value"].fillna(0) + offers_df["Additional_value"].fillna(0)
-                    )
+                    add_total_costs(offers_df)
 
                     logger.info(f"✅ Batch {batch_count} data processing completed successfully")
 
@@ -5420,6 +4598,12 @@ def run(playwright: Playwright) -> None:
 
 
 if __name__ == "__main__":
+    _profiles = load_profiles()
+    _cli_args = build_arg_parser(list(_profiles)).parse_args()
+    logger, debug_handler = setup_comprehensive_logging(include_html_debugging=True)
+    logger.info("🚀 Starting Web Scraper Session")
+    configure(_cli_args, _profiles[_cli_args.search])
+
     # Check if running in re-extraction mode
     if args.reextract:
         logger.info("="*60)

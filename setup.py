@@ -64,7 +64,7 @@ def check_dependencies():
             print("       Install manually: pip install " + " ".join(missing))
             sys.exit(1)
     else:
-        print(f"[OK]   All required packages present")
+        print("[OK]   All required packages present")
 
 
 def check_playwright():
@@ -154,12 +154,12 @@ def create_config_sheets():
     print("\n[SETUP] Initialising config sheets in Google Sheets...")
     # Import after profiles.json is guaranteed to exist
     try:
-        from apartment_scraper import _open_spreadsheet, load_config_sheet, _ALL_PROFILES
+        from apartment_scraper import _open_spreadsheet, load_config_sheet, load_profiles
     except Exception as e:
         print(f"[FAIL] Could not import apartment_scraper: {e}")
         sys.exit(1)
 
-    for name, profile in _ALL_PROFILES.items():
+    for name, profile in load_profiles().items():
         try:
             sp = _open_spreadsheet(profile["sheet_id"])
             load_config_sheet(
