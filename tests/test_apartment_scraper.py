@@ -1060,3 +1060,19 @@ class TestConfigLanguage:
 
     def test_language_row_wins(self):
         assert self._config([["Language", "pl"]])["language"] == "pl"
+
+
+# =============================================================================
+# TEST city bounds
+# =============================================================================
+
+class TestCityBounds:
+    def test_gdansk_address_is_inside_gdansk(self):
+        assert ms.is_within_city_bounds({"lat": 54.39, "lon": 18.60}, "Gdańsk")
+
+    def test_warsaw_coordinates_are_outside_gdansk(self):
+        assert not ms.is_within_city_bounds({"lat": 52.23, "lon": 21.01}, "Gdańsk")
+
+    def test_unknown_city_skips_the_check_instead_of_using_warsaw(self):
+        # Used to fall back to Warsaw's box and reject every address of the city
+        assert ms.is_within_city_bounds({"lat": 50.01, "lon": 20.99}, "Tarnów")
