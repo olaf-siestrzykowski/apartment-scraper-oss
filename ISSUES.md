@@ -35,8 +35,6 @@ as high-confidence.
 - [ ] `apartment_scraper.py:~5025-5031` (duplicated at `5195, 5259, 5339`) - `Full_value =
       Base_value` heuristic is wrong whenever a genuine additional fee equals the base rent, and
       the block is copy-pasted 4x.
-- [ ] `apartment_scraper.py:1264-1353` - cost-extraction dedup doesn't catch the same fee
-      genuinely restated twice in different parts of one description.
 - [ ] `apartment_scraper.py:1948-1959` - `is_duplicate_offer`'s price+location fallback drops
       legitimate 3rd+ listings sharing a price and district keyword.
 - [ ] `apartment_scraper.py:2486-2520, 2945-2965` - `Area` silently defaults to `0.0` on total
@@ -102,8 +100,6 @@ as high-confidence.
       right at midnight.
 - [ ] A few `validate_offer_data` tests check the warning message but never assert `is_valid is
       True`.
-- [ ] `extract_full_cost_from_description`'s "total ≤ base price" branch is untested.
-- [ ] Several regex branches never exercised (Heating, Hot water, `plus:`, `depozyt`/
-      `zabezpieczenie` deposit synonyms).
+- [ ] Several regex branches never exercised (`depozyt`/`zabezpieczenie` deposit synonyms).
 - [ ] `create_offer_key`/`is_duplicate_offer` have no defensive `None` handling (currently safe
       because both callers guard against it).
