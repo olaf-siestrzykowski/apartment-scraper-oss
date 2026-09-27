@@ -39,6 +39,14 @@ FEES_INCLUDED = "included"
 FEES_EXTRA = "extra"
 FEES_UNKNOWN = "unknown"
 
+# A Retry-After longer than this means a daily quota, not a short burst limit
+_MAX_RATE_LIMIT_WAIT = 120
+
+
+class LLMQuotaExceeded(RuntimeError):
+    """The provider's quota is used up - stop scoring for this run."""
+
+
 EMPTY_RESULT = {
     "score": "", "summary": "", "description": "",
     "fees_status": "", "admin_fee": None, "utilities_estimate": None, "optional_extras": [],
@@ -54,9 +62,10 @@ def _build_listing_text(row: dict) -> str:
         ("total_price_pln_per_month", row.get("Full_value", "")),
         ("distance_km", row.get("Distance_km", "")),
         ("commute_min", row.get("Duration_min", "")),
-        ("dishwasher", row.get("Dishwasher", "")),
+        # Column names differ between scraper versions (English vs Polish)
+        ("dishwasher", row.get("Dishwasher", "") or row.get("Zmywarka", "")),
         ("equipment", row.get("Wyposażenie", "")),
-        ("description", str(row.get("Description", ""))[:_MAX_DESC_CHARS]),
+        ("description", str(row.get("Description", "") or row.get("Opis", ""))[:_MAX_DESC_CHARS]),
     ]
     return "\n".join(f"  {k}: {v}" for k, v in fields if v and str(v).strip())
 
@@ -217,6 +226,8 @@ def _score_with_groq(prompt: str, model: str, api_key: str, max_retries: int = 5
         )
         if resp.status_code == 429:
             retry_after = float(resp.headers.get("retry-after", delay))
+            if retry_after > _MAX_RATE_LIMIT_WAIT:
+                raise LLMQuotaExceeded(f"Groq quota exhausted (retry after {retry_after:.0f}s)")
             wait = max(retry_after, delay)
             logger.debug(f"Groq 429 - waiting {wait:.1f}s (attempt {attempt + 1}/{max_retries})")
             time.sleep(wait)
@@ -244,6 +255,8 @@ def score_listing(listing: dict, preferences: str, backend: dict, language: str 
             return _score_with_anthropic(prompt, backend["client"])
         elif backend["type"] == "groq":
             return _score_with_groq(prompt, backend["model"], backend["api_key"])
+    except LLMQuotaExceeded:
+        raise
     except Exception as e:
         logger.warning(f"LLM scoring failed for '{name}': {e}")
     return dict(EMPTY_RESULT)
@@ -328,7 +341,12 @@ def score_listings_df(
             from_cache += 1
             continue
 
-        result = score_listing(dict(row), preferences, backend, language)
+        try:
+            result = score_listing(dict(row), preferences, backend, language)
+        except LLMQuotaExceeded as e:
+            # Unscored rows stay blank and are picked up by the next run
+            logger.warning(f"🤖 {e} - stopping LLM scoring for this run, remaining listings next time")
+            break
         df.at[idx, "LLM_Score"] = result["score"]
         df.at[idx, "LLM_Summary"] = result["summary"]
         df.at[idx, "LLM_Description"] = result["description"]
