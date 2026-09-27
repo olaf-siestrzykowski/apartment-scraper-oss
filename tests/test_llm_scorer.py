@@ -165,6 +165,17 @@ class TestScoreListingsDf:
         assert scorer.call_count == 1
         assert out.loc[0, "LLM_Fees"] == "+716 zł adm."
 
+    def test_quota_stops_the_run_and_keeps_scored_rows(self):
+        parsed = ls._parse_llm_response(llm_reply())
+        df = pd.DataFrame([{"Link": "a"}, {"Link": "b"}, {"Link": "c"}])
+        with patch.object(ls, "_resolve_backend", return_value=self.BACKEND), \
+             patch.object(ls, "score_listing", side_effect=[parsed, ls.LLMQuotaExceeded("quota")]) as scorer, \
+             patch.object(ls.time, "sleep"):
+            out = ls.score_listings_df(df, "near metro", {}, language="pl")
+        assert scorer.call_count == 2  # "c" is never attempted
+        assert out.loc[0, "LLM_Fees"] == "+716\u00a0zł adm."
+        assert out.loc[1, "LLM_Score"] == "" and out.loc[2, "LLM_Score"] == ""
+
     def test_no_preferences_skips_scoring(self):
         df = pd.DataFrame([{"Link": "a"}])
         assert ls.score_listings_df(df, "  ") is df
@@ -185,6 +196,13 @@ class TestGroqRetries:
             result = ls._score_with_groq("prompt", "openai/gpt-oss-20b", "key")
         assert post.call_count == 2
         assert result["admin_fee"] == 716
+
+    def test_daily_quota_is_not_waited_out(self):
+        quota = self._resp(429, headers={"retry-after": "3600"})
+        with patch.object(ls.requests, "post", return_value=quota), patch.object(ls.time, "sleep") as sleep:
+            with pytest.raises(ls.LLMQuotaExceeded):
+                ls._score_with_groq("prompt", "m", "key")
+        sleep.assert_not_called()
 
     def test_gives_up_after_max_retries(self):
         failing = self._resp(503)
