@@ -996,3 +996,67 @@ class TestReadExistingLlmScoresMap:
     def test_sheet_without_llm_columns(self):
         ws = self.FakeWorksheet([["Link", "Name"], ["https://x", "flat"]])
         assert ms.read_existing_llm_scores_map(ws) == {}
+
+
+# =============================================================================
+# TEST listings worksheet + config language
+# =============================================================================
+
+class FakeWorksheet:
+    def __init__(self, title, rows=None):
+        self.title = title
+        self.rows = rows or []
+
+    def get_all_values(self):
+        return self.rows
+
+
+class FakeSpreadsheet:
+    def __init__(self, worksheets):
+        self.sheets = {ws.title: ws for ws in worksheets}
+        self.created = []
+
+    def worksheet(self, title):
+        if title not in self.sheets:
+            raise ms.gspread.WorksheetNotFound(title)
+        return self.sheets[title]
+
+    def add_worksheet(self, title, rows, cols):
+        self.created.append(title)
+        self.sheets[title] = FakeWorksheet(title)
+        return self.sheets[title]
+
+
+class TestListingsWorksheet:
+    def test_default_name(self, monkeypatch):
+        monkeypatch.setattr(ms, "_profile", {})
+        assert ms.listings_worksheet_name() == "apartment list"
+
+    def test_profile_can_choose_the_tab(self, monkeypatch):
+        monkeypatch.setattr(ms, "_profile", {"worksheet": "lista mieszkan (AI)"})
+        assert ms.listings_worksheet_name() == "lista mieszkan (AI)"
+
+    def test_existing_tab_is_reused(self, monkeypatch):
+        monkeypatch.setattr(ms, "_profile", {})
+        sheet = FakeSpreadsheet([FakeWorksheet("apartment list")])
+        assert ms.open_listings_worksheet(sheet).title == "apartment list"
+        assert sheet.created == []
+
+    def test_missing_tab_is_created(self, monkeypatch):
+        # A spreadsheet made by hand (or by another tool) may not have the tab yet
+        monkeypatch.setattr(ms, "_profile", {"worksheet": "lista mieszkan (AI)"})
+        sheet = FakeSpreadsheet([FakeWorksheet("config"), FakeWorksheet("lista mieszkan")])
+        assert ms.open_listings_worksheet(sheet).title == "lista mieszkan (AI)"
+        assert sheet.created == ["lista mieszkan (AI)"]
+
+
+class TestConfigLanguage:
+    def _config(self, rows):
+        sheet = FakeSpreadsheet([FakeWorksheet("config", [["Setting", "Value"]] + rows)])
+        return ms.load_config_sheet(sheet, "gdansk", default_olx_url="", default_otodom_url="", default_origin="")
+
+    def test_missing_language_row_leaves_it_to_the_profile(self):
+        assert self._config([["Transport Mode", "foot-walking"]])["language"] == ""
+
+    def test_language_row_wins(self):
+        assert self._config([["Language", "pl"]])["language"] == "pl"

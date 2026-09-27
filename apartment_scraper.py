@@ -188,6 +188,24 @@ def configure(cli_args: argparse.Namespace, profile: Dict[str, Any]) -> None:
     logger.info(f'Search configuration: {search} (city: {search_city}, office: {origin})')
 
 
+LISTINGS_WORKSHEET_DEFAULT = "apartment list"
+
+
+def listings_worksheet_name() -> str:
+    """Tab the listings are written to - profile key "worksheet", default "apartment list"."""
+    return (_profile.get("worksheet") or "").strip() or LISTINGS_WORKSHEET_DEFAULT
+
+
+def open_listings_worksheet(spreadsheet):
+    """Open the listings tab, creating it if the spreadsheet does not have it yet."""
+    name = listings_worksheet_name()
+    try:
+        return spreadsheet.worksheet(name)
+    except gspread.WorksheetNotFound:
+        logger.info(f"📄 Creating worksheet '{name}'")
+        return spreadsheet.add_worksheet(title=name, rows=1000, cols=80)
+
+
 # ============================================================================
 # DISTANCE CALCULATION MODULE
 # ============================================================================
@@ -717,7 +735,8 @@ def load_config_sheet(spreadsheet, search_profile: str,
         "email_app_password": "",
         "email_districts":    "",
         "email_top_n":        "",
-        "language":           "en",
+        # Blank = not set in the sheet, so the profile's "language" (or "en") applies
+        "language":           "",
     }
 
     default_rows = [
@@ -1858,7 +1877,7 @@ def save_basic_data_to_sheets():
         client = gspread.authorize(creds)
         
         spreadsheet = client.open_by_key(sheet_id)
-        ws = spreadsheet.worksheet("apartment list")
+        ws = open_listings_worksheet(spreadsheet)
         
         # Save basic data
         logger.info("🧹 Clearing existing data...")
@@ -1926,7 +1945,7 @@ def save_full_data_to_sheets():
         client = gspread.authorize(creds)
 
         spreadsheet = client.open_by_key(sheet_id)
-        ws = spreadsheet.worksheet("apartment list")
+        ws = open_listings_worksheet(spreadsheet)
 
         # Read existing statuses before clearing
         existing_status = read_existing_status_map(ws)
@@ -4740,7 +4759,7 @@ if __name__ == "__main__":
             scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
             _creds = ServiceAccountCredentials.from_json_keyfile_name(str(json_creds), scope)
             _client = gspread.authorize(_creds)
-            _ws_cache = _client.open_by_key(sheet_id).worksheet('apartment list')
+            _ws_cache = _client.open_by_key(sheet_id).worksheet(listings_worksheet_name())
             cached_llm = read_existing_llm_scores_map(_ws_cache)
             logger.info(f"🤖 Loaded {len(cached_llm)} cached LLM scores from Sheets")
         except Exception as _llm_cache_err:
@@ -4780,20 +4799,8 @@ if __name__ == "__main__":
             creds = ServiceAccountCredentials.from_json_keyfile_name(str(json_creds), scope)
             client = gspread.authorize(creds)
 
-            sheet_name = 'apartment list'
             spreadsheet = client.open_by_key(sheet_id)
-            ws2 = spreadsheet.worksheet("cheapest")
-
-            try:
-                new_deals = ws2.get("A:BJ")
-                if not new_deals:
-                    new_deals = []
-            except Exception as e:
-                logger.error(f"Error fetching records: {e}")
-                new_deals = []
-
-            new_deals_df = pd.DataFrame(new_deals)
-            ws = spreadsheet.worksheet(sheet_name)
+            ws = open_listings_worksheet(spreadsheet)
 
             # Read existing statuses before clearing
             existing_status = read_existing_status_map(ws)
