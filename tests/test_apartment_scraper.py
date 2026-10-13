@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import apartment_scraper as ms
 import geo  # noqa: E402
 from sinks import sheets  # noqa: E402
+from scrapers import dedup  # noqa: E402
 from parsing import addresses as parsing_addresses  # noqa: E402
 from parsing import dates as parsing_dates  # noqa: E402
 from parsing import description as parsing_description  # noqa: E402
@@ -40,9 +41,9 @@ from parsing import selectors as parsing_selectors  # noqa: E402
 @pytest.fixture
 def reset_seen_offers():
     """Reset the global seen_offers set before each test"""
-    ms.seen_offers = set()
+    dedup.seen_offers = set()
     yield
-    ms.seen_offers = set()
+    dedup.seen_offers = set()
 
 
 @pytest.fixture
@@ -448,23 +449,23 @@ class TestIsDuplicateOffer:
     def test_exact_link_duplicate_detected(self, reset_seen_offers):
         """Test that exact same link is detected as duplicate"""
         link = "https://www.olx.pl/oferta/test-123456.html"
-        assert ms.is_duplicate_offer("Test", 2000, link) is False
-        assert ms.is_duplicate_offer("Test", 2000, link) is True
+        assert dedup.is_duplicate_offer("Test", 2000, link) is False
+        assert dedup.is_duplicate_offer("Test", 2000, link) is True
 
     def test_same_title_and_price_is_duplicate(self, reset_seen_offers):
         """Test that same title+price combination is duplicate"""
-        assert ms.is_duplicate_offer("Mieszkanie 2-pokojowe", 2500) is False
-        assert ms.is_duplicate_offer("Mieszkanie 2-pokojowe", 2500) is True
+        assert dedup.is_duplicate_offer("Mieszkanie 2-pokojowe", 2500) is False
+        assert dedup.is_duplicate_offer("Mieszkanie 2-pokojowe", 2500) is True
 
     def test_different_price_not_duplicate(self, reset_seen_offers):
         """Test that same title but different price is not duplicate"""
-        assert ms.is_duplicate_offer("Mieszkanie Wola", 2000) is False
-        assert ms.is_duplicate_offer("Mieszkanie Wola", 2500) is False
+        assert dedup.is_duplicate_offer("Mieszkanie Wola", 2000) is False
+        assert dedup.is_duplicate_offer("Mieszkanie Wola", 2500) is False
 
     def test_different_title_not_duplicate(self, reset_seen_offers):
         """Test that different title but same price is not duplicate"""
-        assert ms.is_duplicate_offer("Mieszkanie Wola", 2000) is False
-        assert ms.is_duplicate_offer("Mieszkanie Mokotów", 2000) is False
+        assert dedup.is_duplicate_offer("Mieszkanie Wola", 2000) is False
+        assert dedup.is_duplicate_offer("Mieszkanie Mokotów", 2000) is False
 
     def test_link_takes_precedence_over_title(self, reset_seen_offers):
         """Test that link-based deduplication takes precedence"""
@@ -472,11 +473,11 @@ class TestIsDuplicateOffer:
         link2 = "https://www.olx.pl/oferta/test-222222.html"
 
         # Same title and price but different links - should not be duplicate
-        assert ms.is_duplicate_offer("Test", 2000, link1) is False
-        assert ms.is_duplicate_offer("Test", 2000, link2) is False
+        assert dedup.is_duplicate_offer("Test", 2000, link1) is False
+        assert dedup.is_duplicate_offer("Test", 2000, link2) is False
 
         # Same link - should be duplicate
-        assert ms.is_duplicate_offer("Different Title", 3000, link1) is True
+        assert dedup.is_duplicate_offer("Different Title", 3000, link1) is True
 
     def test_location_similarity_limit(self, reset_seen_offers):
         """Test that price+location similarity is limited to 2 offers"""
@@ -485,26 +486,26 @@ class TestIsDuplicateOffer:
         title2 = "Mieszkanie 3-pokojowe w Warszawie, Wola, ul. Krótka"
         title3 = "Mieszkanie 1-pokojowe w Warszawie, Wola, ul. Średnia"
 
-        assert ms.is_duplicate_offer(title1, 2000) is False
-        assert ms.is_duplicate_offer(title2, 2000) is False
+        assert dedup.is_duplicate_offer(title1, 2000) is False
+        assert dedup.is_duplicate_offer(title2, 2000) is False
         # Third one with same price and location should be detected as duplicate
-        assert ms.is_duplicate_offer(title3, 2000) is True
+        assert dedup.is_duplicate_offer(title3, 2000) is True
 
     def test_no_link_uses_content_key(self, reset_seen_offers):
         """Test that without link, content-based key is used"""
         title = "Piękne Mieszkanie Centrum"
-        assert ms.is_duplicate_offer(title, 2500) is False
-        assert ms.is_duplicate_offer(title, 2500) is True
+        assert dedup.is_duplicate_offer(title, 2500) is False
+        assert dedup.is_duplicate_offer(title, 2500) is True
 
     def test_reset_clears_duplicates(self):
         """Test that resetting seen_offers allows re-adding same offer"""
-        ms.seen_offers = set()
-        assert ms.is_duplicate_offer("Test", 2000) is False
-        assert ms.is_duplicate_offer("Test", 2000) is True
+        dedup.seen_offers = set()
+        assert dedup.is_duplicate_offer("Test", 2000) is False
+        assert dedup.is_duplicate_offer("Test", 2000) is True
 
         # Reset
-        ms.seen_offers = set()
-        assert ms.is_duplicate_offer("Test", 2000) is False
+        dedup.seen_offers = set()
+        assert dedup.is_duplicate_offer("Test", 2000) is False
 
 
 # =============================================================================
@@ -878,10 +879,10 @@ class TestIntegration:
         assert is_valid is True
 
         # Check not duplicate
-        assert ms.is_duplicate_offer(offer["Name"], offer["Base_value"], offer["Link"]) is False
+        assert dedup.is_duplicate_offer(offer["Name"], offer["Base_value"], offer["Link"]) is False
 
         # Same offer is duplicate
-        assert ms.is_duplicate_offer(offer["Name"], offer["Base_value"], offer["Link"]) is True
+        assert dedup.is_duplicate_offer(offer["Name"], offer["Base_value"], offer["Link"]) is True
 
     def test_date_and_address_parsing_workflow(self):
         """Test workflow: parse date and sanitize address"""
@@ -1084,3 +1085,26 @@ class TestCityBounds:
     def test_unknown_city_skips_the_check_instead_of_using_warsaw(self):
         # Used to fall back to Warsaw's box and reject every address of the city
         assert geo.is_within_city_bounds({"lat": 50.01, "lon": 20.99}, "Tarnów")
+
+
+# =============================================================================
+# TEST listing scrapers return rows; run() appends them
+# =============================================================================
+
+class TestListingScrapersReturnRows:
+    def test_too_short_html_gives_no_rows(self):
+        from scrapers.olx import scrape_olx
+        from scrapers.otodom import scrape_otodom_working
+        assert scrape_olx("") == []
+        assert scrape_otodom_working("<html></html>") == []
+
+    def test_add_offers_appends_and_counts(self, monkeypatch):
+        monkeypatch.setattr(ms, "offers_df", pd.DataFrame([{"Link": "a"}]))
+        assert ms._add_offers([{"Link": "b"}, {"Link": "c"}]) == 2
+        assert ms.offers_df["Link"].tolist() == ["a", "b", "c"]
+
+    def test_add_offers_with_no_rows_keeps_the_frame(self, monkeypatch):
+        df = pd.DataFrame([{"Link": "a"}])
+        monkeypatch.setattr(ms, "offers_df", df)
+        assert ms._add_offers([]) == 0
+        assert ms.offers_df is df
