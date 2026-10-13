@@ -23,6 +23,7 @@ from bs4 import BeautifulSoup
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import apartment_scraper as ms
+import geo  # noqa: E402
 from parsing import addresses as parsing_addresses  # noqa: E402
 from parsing import dates as parsing_dates  # noqa: E402
 from parsing import description as parsing_description  # noqa: E402
@@ -1074,11 +1075,11 @@ class TestConfigLanguage:
 
 class TestCityBounds:
     def test_gdansk_address_is_inside_gdansk(self):
-        assert ms.is_within_city_bounds({"lat": 54.39, "lon": 18.60}, "Gdańsk")
+        assert geo.is_within_city_bounds({"lat": 54.39, "lon": 18.60}, "Gdańsk")
 
     def test_warsaw_coordinates_are_outside_gdansk(self):
-        assert not ms.is_within_city_bounds({"lat": 52.23, "lon": 21.01}, "Gdańsk")
+        assert not geo.is_within_city_bounds({"lat": 52.23, "lon": 21.01}, "Gdańsk")
 
     def test_unknown_city_skips_the_check_instead_of_using_warsaw(self):
         # Used to fall back to Warsaw's box and reject every address of the city
-        assert ms.is_within_city_bounds({"lat": 50.01, "lon": 20.99}, "Tarnów")
+        assert geo.is_within_city_bounds({"lat": 50.01, "lon": 20.99}, "Tarnów")

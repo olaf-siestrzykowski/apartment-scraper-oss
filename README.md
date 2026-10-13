@@ -365,7 +365,8 @@ pytest tests/ -v
 
 | File | Purpose |
 |---|---|
-| `apartment_scraper.py` | Main scraper: listing scrape, detail extraction, distance calculation, Sheets sync |
+| `apartment_scraper.py` | Main scraper: listing scrape, detail extraction, Sheets sync |
+| `geo.py` | Geocoding (Nominatim with Photon fallback, city bounding boxes) and commute distances via the OpenRouteService Matrix API |
 | `parsing/` | Pure parsing helpers with no browser, network or global state: prices and total cost (`prices.py`), Polish dates (`dates.py`), addresses (`addresses.py`), fields from the description (`description.py`), selector fallbacks (`selectors.py`), offer keys and validation (`offers.py`) |
 | `llm_scorer.py` | Optional LLM pass: match score, description, fees from the description |
 | `scripts/eval_fee_extraction.py` | Measures LLM fee extraction against scraped listings |
