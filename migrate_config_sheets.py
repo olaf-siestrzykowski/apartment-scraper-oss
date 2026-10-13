@@ -5,18 +5,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from apartment_scraper import _open_spreadsheet, load_config_sheet, load_profiles
+from apartment_scraper import load_profiles
+from sinks.sheets import _open_spreadsheet, load_config_sheet
 
-for name, profile in load_profiles().items():
-    print(f"Updating config sheet for '{name}'...")
-    try:
-        sp = _open_spreadsheet(profile["sheet_id"])
-        load_config_sheet(
-            sp, name,
-            default_olx_url=profile["olx_url"],
-            default_otodom_url=profile["otodom_url"],
-            default_origin=profile["origin_address"],
-        )
-        print("  ✅ Done")
-    except Exception as e:
-        print(f"  ❌ Error: {e}")
+
+def main() -> None:
+    for name, profile in load_profiles().items():
+        print(f"Updating config sheet for '{name}'...")
+        try:
+            sp = _open_spreadsheet(profile["sheet_id"])
+            load_config_sheet(
+                sp, name,
+                default_olx_url=profile["olx_url"],
+                default_otodom_url=profile["otodom_url"],
+                default_origin=profile["origin_address"],
+            )
+            print("  ✅ Done")
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+
+
+if __name__ == "__main__":
+    main()

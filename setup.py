@@ -154,7 +154,8 @@ def create_config_sheets():
     print("\n[SETUP] Initialising config sheets in Google Sheets...")
     # Import after profiles.json is guaranteed to exist
     try:
-        from apartment_scraper import _open_spreadsheet, load_config_sheet, load_profiles
+        from apartment_scraper import load_profiles
+        from sinks.sheets import _open_spreadsheet, load_config_sheet
     except Exception as e:
         print(f"[FAIL] Could not import apartment_scraper: {e}")
         sys.exit(1)

@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import apartment_scraper as ms
 import geo  # noqa: E402
+from sinks import sheets  # noqa: E402
 from parsing import addresses as parsing_addresses  # noqa: E402
 from parsing import dates as parsing_dates  # noqa: E402
 from parsing import description as parsing_description  # noqa: E402
@@ -993,16 +994,16 @@ class TestReadExistingLlmScoresMap:
 
     def test_reads_polish_headers(self):
         # "pl" profiles write translated headers - the cache used to come back empty for them
-        header = ms.translate_header_row(["Link", "LLM_Score", "LLM_Summary", "LLM_Description", "LLM_Fees"], "pl")
+        header = sheets.translate_header_row(["Link", "LLM_Score", "LLM_Summary", "LLM_Description", "LLM_Fees"], "pl")
         ws = self.FakeWorksheet([header, ["https://x", "8", "fajne", "opis", "w cenie"]])
-        cache = ms.read_existing_llm_scores_map(ws)
+        cache = sheets.read_existing_llm_scores_map(ws)
         assert cache["https://x"]["score"] == "8"
         assert cache["https://x"]["fees"] == "w cenie"
         assert cache["https://x"]["admin_fee"] == ""
 
     def test_sheet_without_llm_columns(self):
         ws = self.FakeWorksheet([["Link", "Name"], ["https://x", "flat"]])
-        assert ms.read_existing_llm_scores_map(ws) == {}
+        assert sheets.read_existing_llm_scores_map(ws) == {}
 
 
 # =============================================================================
@@ -1060,7 +1061,7 @@ class TestListingsWorksheet:
 class TestConfigLanguage:
     def _config(self, rows):
         sheet = FakeSpreadsheet([FakeWorksheet("config", [["Setting", "Value"]] + rows)])
-        return ms.load_config_sheet(sheet, "gdansk", default_olx_url="", default_otodom_url="", default_origin="")
+        return sheets.load_config_sheet(sheet, "gdansk", default_olx_url="", default_otodom_url="", default_origin="")
 
     def test_missing_language_row_leaves_it_to_the_profile(self):
         assert self._config([["Transport Mode", "foot-walking"]])["language"] == ""
