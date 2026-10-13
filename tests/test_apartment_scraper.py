@@ -1108,3 +1108,27 @@ class TestListingScrapersReturnRows:
         monkeypatch.setattr(ms, "offers_df", df)
         assert ms._add_offers([]) == 0
         assert ms.offers_df is df
+
+
+# =============================================================================
+# TEST Dishwasher column
+# =============================================================================
+
+class TestDishwasherColumn:
+    def test_description_only(self):
+        # Used to leave the column out entirely when "Wyposażenie" was missing
+        df = pd.DataFrame({"Description": ["Mieszkanie ma zmywarkę i pralkę", "Zmywarka w zestawie", "bez AGD"]})
+        out = parsing_description.add_dishwasher_column(df)
+        assert out["Dishwasher"].tolist() == ["Yes", "Yes", "No"]
+
+    def test_any_equipment_column_counts(self):
+        df = pd.DataFrame({
+            "Wyposażenie": ["lodówka", "", None],
+            "Budynek i materiały_Wyposażenie": ["", "zmywarka", ""],
+            "Description": ["", "", "pralka"],
+        })
+        assert parsing_description.add_dishwasher_column(df)["Dishwasher"].tolist() == ["No", "Yes", "No"]
+
+    def test_no_source_columns(self):
+        df = pd.DataFrame({"Link": ["a"]})
+        assert parsing_description.add_dishwasher_column(df)["Dishwasher"].tolist() == ["No"]

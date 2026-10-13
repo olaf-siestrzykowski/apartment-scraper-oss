@@ -249,3 +249,19 @@ def apply_custom_fields_extraction(df: pd.DataFrame) -> pd.DataFrame:
             logger.debug(f"  {col}: {count} values extracted")
 
     return df
+
+
+DISHWASHER_SOURCE_COLUMNS = ("Wyposażenie", "Budynek i materiały_Wyposażenie", "Description")
+
+
+def add_dishwasher_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Dishwasher = "Yes" when any equipment or description column mentions a dishwasher.
+
+    Matches the stem "zmywark" so inflected forms (zmywarkę, zmywarki, zmywarką) count too.
+    """
+    mask = pd.Series(False, index=df.index)
+    for col in DISHWASHER_SOURCE_COLUMNS:
+        if col in df.columns:
+            mask |= df[col].astype(str).str.contains("zmywark", case=False, na=False)
+    df["Dishwasher"] = mask.map({True: "Yes", False: "No"})
+    return df
