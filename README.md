@@ -365,7 +365,8 @@ pytest tests/ -v
 
 | File | Purpose |
 |---|---|
-| `apartment_scraper.py` | Main scraper: listing scrape, detail extraction, run orchestration |
+| `apartment_scraper.py` | CLI and run orchestration: browser session, pagination, saving progress, re-extraction mode |
+| `scrapers/` | Portal scrapers: `olx.py` and `otodom.py` parse search result pages into offer rows and fill in details from each offer page; `dedup.py` drops offers already seen in this run (same link, or same title and price across portals); `common.py` holds scrolling and HTML snapshots |
 | `geo.py` | Geocoding (Nominatim with Photon fallback, city bounding boxes) and commute distances via the OpenRouteService Matrix API |
 | `sinks/` | Output destinations: Google Sheets config tab, status columns and header translation (`sheets.py`), Telegram alerts (`telegram.py`) |
 | `parsing/` | Pure parsing helpers with no browser, network or global state: prices and total cost (`prices.py`), Polish dates (`dates.py`), addresses (`addresses.py`), fields from the description (`description.py`), selector fallbacks (`selectors.py`), offer keys and validation (`offers.py`) |
