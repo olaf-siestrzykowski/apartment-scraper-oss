@@ -18,7 +18,7 @@ from typing import Optional, Dict, Any, List
 import logging
 
 from geo import API_KEY, calculate_distances_for_offers
-from parsing.description import apply_custom_fields_extraction
+from parsing.description import add_dishwasher_column, apply_custom_fields_extraction
 from parsing.offers import validate_offer_data
 from parsing.prices import add_total_costs
 from scrapers.common import save_listing_page_html, scroll_alot
@@ -1470,21 +1470,7 @@ def _enrich_offers() -> None:
     logger.info("="*60)
     offers_df = apply_custom_fields_extraction(offers_df)
 
-    if 'Budynek i materiały_Wyposażenie' in offers_df.columns and 'Wyposażenie' in offers_df.columns:
-        offers_df['Dishwasher'] = np.where(
-            (offers_df['Wyposażenie'].str.contains('zmywarka', na=False)) |
-            (offers_df['Description'].str.contains('zmywarka', na=False)) |
-            (offers_df['Budynek i materiały_Wyposażenie'].str.contains('zmywarka', na=False)),
-            "Yes", "No")
-    elif 'Wyposażenie' in offers_df.columns:
-        offers_df['Dishwasher'] = np.where(
-            (offers_df['Wyposażenie'].str.contains('zmywarka', na=False)) |
-            (offers_df['Description'].str.contains('zmywarka', na=False)),
-            "Yes", "No")
-    elif 'Description' in offers_df.columns:
-        mask = offers_df['Description'].str.contains('zmywarka', na=False)
-    else:
-        offers_df['Dishwasher'] = "No"
+    offers_df = add_dishwasher_column(offers_df)
 
     # Merge portal-specific columns and reorder before saving
     offers_df = merge_portal_columns(offers_df)
