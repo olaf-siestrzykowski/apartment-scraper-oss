@@ -1,6 +1,6 @@
 # Tests
 
-Unit tests for the parsing/extraction helpers in `apartment_scraper.py`: price parsing,
+Unit tests for the scraper modules (`parsing/`, `scrapers/`, `sinks/`, `pipeline.py`): price parsing,
 address cleaning, Polish date parsing, duplicate detection, cost extraction, and
 offer/link validation.
 
