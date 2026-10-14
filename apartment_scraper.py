@@ -21,9 +21,9 @@ from geo import API_KEY, calculate_distances_for_offers
 from parsing.description import add_dishwasher_column, apply_custom_fields_extraction
 from parsing.offers import validate_offer_data
 from parsing.prices import add_total_costs
-from scrapers.common import save_listing_page_html, scroll_alot
-from scrapers.olx import _extract_olx_from_soup, extract_olx_details, scrape_olx
-from scrapers.otodom import _extract_otodom_from_soup, extract_otodom_details, scrape_otodom_working
+from scrapers.base import PortalScraper
+from scrapers.olx import OlxScraper
+from scrapers.otodom import OtodomScraper
 from sinks.sheets import (
     GOOGLE_CREDS_PATH,
     _open_spreadsheet,
@@ -514,6 +514,8 @@ def reextract_from_saved_html(html_folder: str = None, offers_df_input: pd.DataF
     logger.info(f"📊 DataFrame has {len(df)} rows")
     logger.info(f"🔄 Force all: {force_all}")
 
+    scrapers_by_name = {scraper.name: scraper for scraper in make_scrapers()}
+
     # Track progress
     progress = ProgressTracker(len(html_files), "Re-extraction from HTML")
     progress.start()
@@ -571,16 +573,14 @@ def reextract_from_saved_html(html_folder: str = None, offers_df_input: pd.DataF
 
             soup = BeautifulSoup(html_content, "html.parser")
 
-            # Extract data based on source
-            if source == "olx":
-                extracted = _extract_olx_from_soup(soup, index)
-            elif source == "otodom":
-                extracted = _extract_otodom_from_soup(soup, index)
-            else:
+            # Extract data with the scraper whose name prefixes the file
+            scraper = scrapers_by_name.get(source)
+            if scraper is None:
                 logger.debug(f"Unknown source: {source}")
                 skipped_count += 1
                 progress.update(item_start)
                 continue
+            extracted = scraper.extract_from_soup(soup, index)
 
             if extracted:
                 # Update DataFrame with extracted data
@@ -643,7 +643,12 @@ def _add_offers(rows: List[Dict[str, Any]]) -> int:
     return len(rows)
 
 
-def _load_run_config() -> tuple:
+def make_scrapers() -> List[PortalScraper]:
+    """The portals this run scrapes, in listing-collection order."""
+    return [OlxScraper(debug_handler=debug_handler), OtodomScraper()]
+
+
+def _load_run_config() -> None:
     """Load the profile's config tab (falls back to profiles.json) into _run_config."""
     global _run_config
 
@@ -672,7 +677,6 @@ def _load_run_config() -> tuple:
     # Language for Sheet headers / email digest / Telegram messages (config sheet wins)
     if not _run_config.get("language"):
         _run_config["language"] = _profile.get("language", "en")
-    return _run_config["olx_url"], _run_config["otodom_url"]
 
 
 def _launch_browser(playwright: Playwright):
@@ -702,358 +706,6 @@ def _launch_browser(playwright: Playwright):
     return browser, context
 
 
-def _scrape_olx_listings(context, run_olx_url: str, max_pages: Optional[int]):
-    """Walk the OLX search result pages, collecting offers into offers_df. Returns the page."""
-    global offers_df
-
-    ## PART 1 - OLX
-    page2 = context.new_page()
-    page2.goto(run_olx_url, timeout=60000)
-    try:
-        accept_button = page2.get_by_role("button", name="Akceptuję")
-        if accept_button.count() > 0:
-            accept_button.click(timeout=10000)
-            logger.info("✅ Clicked OLX accept cookies button")
-        else:
-            logger.info("ℹ️ No OLX 'Akceptuję' button found, trying OneTrust accept-all...")
-            try:
-                onetrust_btn = page2.locator("#onetrust-accept-btn-handler, .ot-btn-accept-all, button#accept-all-button")
-                if onetrust_btn.count() > 0:
-                    onetrust_btn.first.click(timeout=5000)
-                    logger.info("✅ Clicked OneTrust accept-all button")
-                    page2.wait_for_selector("#onetrust-consent-sdk", state="hidden", timeout=5000)
-                else:
-                    logger.info("ℹ️ No cookie consent button found")
-            except Exception as e2:
-                logger.warning(f"⚠️ Could not dismiss OneTrust: {e2}")
-                # Force-hide the overlay via JS as last resort
-                try:
-                    page2.evaluate("document.getElementById('onetrust-consent-sdk')?.remove()")
-                    logger.info("✅ Removed OneTrust overlay via JS")
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.warning(f"⚠️ Could not click OLX accept button: {e}")
-    scroll_alot(page2)
-    next_btn = page2.get_by_test_id("pagination-forward")
-    current_page_number = page2.locator("li.pagination-item__active")
-    last_page_number = page2.locator('ul[data-testid="pagination-list"] li').last
-    olx_html = page2.inner_html("body")
-    # Save listing page HTML
-    save_listing_page_html(olx_html, 1, source="olx")
-    olx_added = _add_offers(scrape_olx(olx_html))
-    logger.info(f"OLX page 1 added {olx_added} offers")
-
-    try:
-        logger.debug(f'OLX page: {current_page_number.inner_text(timeout=3000)} / {last_page_number.inner_text(timeout=3000)}')
-    except Exception:
-        pass
-    
-    page_count = 1  # Track page count for debug mode
-    while next_btn.count() > 0:
-        # Check if we've reached max pages limit
-        if max_pages and page_count >= max_pages:
-            logger.info(f"🛑 Reached max_pages limit of {max_pages}")
-            break
-            
-        next_btn = page2.get_by_test_id("pagination-forward")
-        # Dismiss any cookie overlay before clicking pagination
-        try:
-            page2.evaluate("document.getElementById('onetrust-consent-sdk')?.remove()")
-        except Exception:
-            pass
-        next_btn.click()
-        time.sleep(0.2)
-        scroll_alot(page2)
-        time.sleep(0.4)
-        next_btn = page2.get_by_test_id("pagination-forward")
-        current_page_number = page2.locator("li.pagination-item__active")
-        last_page_number = page2.locator('ul[data-testid="pagination-list"] li').last
-        
-        page_count += 1  # Increment page counter
-        
-        try:
-            current_page_text = current_page_number.inner_text(timeout=5000)
-            last_page_text = last_page_number.inner_text(timeout=5000)
-            logger.debug(f'OLX page: {current_page_text} / {last_page_text}')
-        except Exception as e:
-            logger.warning(f"⚠️ Could not get page numbers: {e}")
-            current_page_text = "unknown"
-        
-        olx_html = page2.inner_html("body")
-        # Save listing page HTML
-        save_listing_page_html(olx_html, page_count, source="olx")
-        olx_added = _add_offers(scrape_olx(olx_html))
-
-        try:
-            if current_page_text != "unknown":
-                logger.info(f"OLX page {current_page_text} added {olx_added} offers")
-            else:
-                logger.info(f"OLX page added {olx_added} offers")
-        except:
-            logger.info(f"OLX page added {olx_added} offers")
-
-    logger.debug(f'OLX offers before dedup: {len(offers_df)}')
-    offers_df = offers_df[offers_df['Link'] != "olx.pl/"]
-    offers_df = offers_df.drop_duplicates(subset=['Link']).reset_index(drop=True)
-    logger.info(f'OLX offers after dedup: {len(offers_df)}')
-    return page2
-
-
-def _scrape_otodom_listings(context, run_otodom_url: str):
-    """Walk the Otodom search result pages, collecting offers into offers_df. Returns the page."""
-    # PART 2 - Scrape Otodom
-    page = context.new_page()
-
-    # Add retry logic for page loading
-    max_retries = 3
-    page_loaded_successfully = False
-
-    for attempt in range(max_retries):
-        try:
-            logger.info(f"Loading Otodom page (attempt {attempt + 1}/{max_retries})")
-            page.goto(run_otodom_url, timeout=50000, wait_until="domcontentloaded")
-            
-            # Wait for page content with multiple verification strategies
-            try:
-                # Wait for network idle to ensure basic content is loaded
-                page.wait_for_load_state('networkidle', timeout=30000)
-                time.sleep(1)  # Extra grace period for JavaScript rendering
-                
-                # Strategy 1: Check for listing container elements (most reliable)
-                page_html = page.inner_html("body")
-                has_listings = False
-                has_content = False
-                listing_count = 0
-                
-                # Try to find listings using multiple selectors
-                try:
-                    # Primary selector for Otodom listings
-                    listings = page.locator('div[data-testid="listing-item"]')
-                    listing_count = listings.count()
-                    if listing_count > 0:
-                        has_listings = True
-                        logger.info(f"✅ Found {listing_count} listings via primary selector")
-                    else:
-                        logger.debug("ℹ️ No listings found via primary selector (data-testid=listing-item)")
-                except Exception as e:
-                    logger.debug(f"ℹ️ Primary selector check failed: {e}")
-                
-                # Fallback: Check for any listing-like containers
-                if not has_listings:
-                    try:
-                        articles = page.locator('article')
-                        article_count = articles.count()
-                        if article_count > 0:
-                            has_listings = True
-                            listing_count = article_count
-                            logger.info(f"✅ Found {article_count} listings via fallback selector (article)")
-                        else:
-                            logger.debug("ℹ️ No articles found on page")
-                    except Exception as e:
-                        logger.debug(f"ℹ️ Article selector check failed: {e}")
-                
-                # Fallback: Check for divs with specific classes
-                if not has_listings:
-                    try:
-                        listing_divs = page.locator('div[class*="listing"]')
-                        div_count = listing_divs.count()
-                        if div_count > 0:
-                            has_listings = True
-                            listing_count = div_count
-                            logger.info(f"✅ Found {div_count} potential listings via div selector")
-                        else:
-                            logger.debug("ℹ️ No divs with 'listing' in class found")
-                    except Exception as e:
-                        logger.debug(f"ℹ️ Div selector check failed: {e}")
-                
-                # Fallback: Check HTML content for indicators
-                if not has_listings:
-                    has_content = len(page_html) > 5000
-                    has_text_indicators = (
-                        'oferta' in page_html.lower() or 
-                        'listing' in page_html.lower() or 
-                        'zł' in page_html or
-                        'wynajm' in page_html.lower()
-                    )
-                    
-                    logger.debug(f"ℹ️ HTML check: size={len(page_html)} bytes, has_indicators={has_text_indicators}")
-                    
-                    if has_content and has_text_indicators:
-                        logger.info(f"✅ Page has content (HTML size: {len(page_html)} bytes)")
-                        has_listings = True
-                
-                if has_listings:
-                    logger.info("✅ Page loaded successfully with content")
-                    page_loaded_successfully = True
-                    break
-                else:
-                    logger.warning(f"⚠️ Page appears empty on attempt {attempt + 1} (no listings found)")
-                    if attempt < max_retries - 1:
-                        time.sleep(5)
-                        continue
-                        
-            except Exception as e:
-                logger.warning(f"⚠️ Page load timeout on attempt {attempt + 1}: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(5)
-                    continue
-                    
-        except Exception as e:
-            logger.error(f"❌ Failed to load page on attempt {attempt + 1}: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(5)
-                continue
-
-    # NOW this is at the correct indentation level (outside the for loop)
-    # Skip Otodom but continue to detailed extraction
-    # After the for loop, before the if statement
-    if 'page_loaded_successfully' not in locals():
-        page_loaded_successfully = False
-        logger.error("⚠️ page_loaded_successfully was not set - defaulting to False")
-
-    if not page_loaded_successfully:
-        logger.error("❌ Otodom listing scraping skipped due to page load failure")
-        logger.info(f"⚠️ Continuing with {len(offers_df)} offers from OLX only - will extract details")
-        try:
-            page.close()
-        except:
-            pass
-        
-    else:
-        try:
-            accept_button = page.get_by_role("button", name="Akceptuję")
-            if accept_button.count() > 0:
-                accept_button.click()
-                logger.info("✅ Clicked accept cookies button")
-            else:
-                logger.info("ℹ️ No accept button found")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not click accept button: {e}")
-        
-        scroll_alot(page)
-        time.sleep(1)
-        page_html = page.inner_html("body")
-        # Save listing page HTML
-        save_listing_page_html(page_html, 1, source="otodom")
-
-        # Initial scrape after loading first page
-        otodom_added = _add_offers(scrape_otodom_working(page_html))
-        logger.info(f"Otodom initial page added {otodom_added} offers")
-
-        # Updated selectors for the pagination elements
-        try:
-            # Try new selector first, fall back to old one
-            ul_nav = page.locator("ul[data-cy='nexus-pagination-component']")
-            if ul_nav.count() == 0:
-                ul_nav = page.locator("[data-cy='search-list-pagination'] nav ul, [data-sentry-component='BasePagination'] ul")
-            ul_nav.wait_for(timeout=10000)
-
-            all_items = ul_nav.locator("li")
-            logger.info(f"Pagination items found: {all_items.count()}")
-            
-            # Your pagination logic continues here...
-            def go_to_next_page(page) -> bool:
-                """Clicks the 'Next' pagination item if enabled. Returns False on last page."""
-                logger.debug("Checking pagination for NEXT button...")
-
-                scroll_alot(page)
-                time.sleep(1)
-
-                pagination = ul_nav
-                pagination.wait_for(state="visible", timeout=30000)
-
-                # The aria-label is on the BUTTON, not on the LI
-                next_btn = pagination.locator("button[aria-label='Go to next Page']").first
-
-                if next_btn.count() == 0:
-                    # Try alternative selector
-                    next_btn = pagination.locator("button[title='Go to next Page']").first
-
-                if next_btn.count() == 0:
-                    logger.debug("No next button found – assuming last page.")
-                    return False
-
-                # Check if button is disabled
-                is_disabled = next_btn.is_disabled()
-                logger.debug(f"Next button disabled: {is_disabled}")
-
-                if is_disabled:
-                    logger.debug("Next button is disabled – reached last page.")
-                    return False
-
-                logger.debug("Clicking NEXT button...")
-                next_btn.click()
-                page.wait_for_timeout(1500)
-                return True
-
-            page_index = 1
-
-            while True:
-                logger.info(f"Scraping Otodom page {page_index}")
-                scroll_alot(page)
-                time.sleep(1)
-                scroll_alot(page)
-                html_now = page.content()
-                # Save listing page HTML
-                save_listing_page_html(html_now, page_index, source="otodom")
-                page_added = _add_offers(scrape_otodom_working(html_now))
-                logger.info(f"Otodom page {page_index} added {page_added} offers")
-
-                # Get current selected page number before clicking next
-                try:
-                    # aria-current is on the BUTTON, not the LI
-                    selected_locator = ul_nav.locator("button[aria-current='true']").first
-                    selected_before = selected_locator.inner_text().strip()
-                    logger.debug(f"Currently selected page: {selected_before}")
-                except Exception:
-                    selected_before = "?"
-                    logger.debug("Could not read currently selected page.")
-
-                # Try to move to next page
-                if not go_to_next_page(page):
-                    logger.info(f"No more pages after page {page_index}. Stopping.")
-                    break
-
-                logger.debug(f"Waiting for page to change from {selected_before}...")
-
-                try:
-                    page.wait_for_function(
-                        """
-                        ([sel, before]) => {
-                            const el = document.querySelector(sel);
-                            if (!el) return false;
-                            const cur = el.textContent.trim();
-                            return cur && cur !== before;
-                        }
-                        """,
-                        arg=["ul[data-cy='nexus-pagination-component'] button[aria-current='true']", selected_before],
-                        timeout=8000
-                    )
-                    logger.debug("Page changed successfully.")
-                except Exception:
-                    logger.debug("Page change timed out – checking if page actually changed...")
-                    # Check if page changed despite timeout
-                    try:
-                        selected_after = ul_nav.locator("button[aria-current='true']").first.inner_text().strip()
-                        if selected_after == selected_before:
-                            logger.debug(f"Page still on {selected_before} – stopping pagination.")
-                            break
-                        else:
-                            logger.debug(f"Page did change to {selected_after} – continuing.")
-                    except Exception:
-                        logger.debug("Could not verify page change – stopping.")
-                        break
-
-                page_index += 1
-                
-        except Exception as e:
-            logger.warning(f"⚠️ Otodom pagination not available (single page of results): {e}")
-            logger.info("Continuing with offers collected from first page only")
-
-    logger.info("Otodom scraping complete")
-    return page
-
 
 def _finish_listing_phase() -> None:
     """Dedup, log stats, compute total costs and save the basic rows before detail extraction."""
@@ -1082,25 +734,23 @@ def _finish_listing_phase() -> None:
     save_basic_data_to_sheets()
 
 
-def _extract_all_details(context) -> None:
-    """Open every offer page (OLX and Otodom interleaved, in batches) and fill in details."""
+def _extract_all_details(context, scrapers: List[PortalScraper]) -> None:
+    """Open every offer page (portals interleaved, in batches) and fill in details."""
     # PART 3 - Scrape all offers (DETAILED EXTRACTION PHASE)
     logger.info("🔍 Starting mixed detailed extraction phase...")
 
-    offers_otodom = offers_df[offers_df["Link"].str.contains("otodom.pl", na=False, regex=False)].copy()
-    offers_olx = offers_df[offers_df["Link"].str.contains("olx.pl", na=False, regex=False)].copy()
+    # Randomize order within each portal to distribute server load and avoid patterns
+    indices_by_scraper = {}
+    for scraper in scrapers:
+        portal_offers = offers_df[offers_df["Link"].str.contains(scraper.domain, na=False, regex=False)]
+        indices_by_scraper[scraper.name] = portal_offers.sample(frac=1).index.tolist()
 
-    # Randomize order to distribute server load and avoid patterns
-    otodom_indices = offers_otodom.sample(frac=1).index.tolist()
-    olx_indices = offers_olx.sample(frac=1).index.tolist()
-
-    # Mix both sources for balanced extraction
+    # Interleave the portals for balanced extraction
     mixed_extraction_plan = []
-    for i in range(max(len(otodom_indices), len(olx_indices))):
-        if i < len(otodom_indices):
-            mixed_extraction_plan.append(('otodom', otodom_indices[i]))
-        if i < len(olx_indices):
-            mixed_extraction_plan.append(('olx', olx_indices[i]))
+    for i in range(max((len(ix) for ix in indices_by_scraper.values()), default=0)):
+        for scraper in scrapers:
+            if i < len(indices_by_scraper[scraper.name]):
+                mixed_extraction_plan.append((scraper, indices_by_scraper[scraper.name][i]))
 
     # Apply max extractions limit if set
     max_extractions = int(os.environ.get('DEBUG_MAX_EXTRACTIONS', '')) if os.environ.get('DEBUG_MAX_EXTRACTIONS') else None
@@ -1108,33 +758,20 @@ def _extract_all_details(context) -> None:
         logger.info(f"🛑 Limiting extractions from {len(mixed_extraction_plan)} to {max_extractions}")
         mixed_extraction_plan = mixed_extraction_plan[:max_extractions]
 
-    logger.info(
-        f"🔀 Mixed extraction plan: {len(offers_otodom)} Otodom + {len(offers_olx)} OLX = {len(mixed_extraction_plan)} total")
+    counts = " + ".join(f"{len(ix)} {name}" for name, ix in indices_by_scraper.items())
+    logger.info(f"🔀 Mixed extraction plan: {counts} = {len(mixed_extraction_plan)} total")
 
-    page_otodom = context.new_page()
-    page_olx = context.new_page()
+    # One browser tab per portal, recreated if the site closes it
+    pages = {scraper.name: context.new_page() for scraper in scrapers}
 
-    def is_page_valid(page):
-        """Check if page is still valid and usable"""
+    def page_for(scraper: PortalScraper):
+        """The portal's tab, recreated if it was closed."""
         try:
-            # Try to access the page - if closed, this will fail
-            page.url
-            return True
+            pages[scraper.name].url
         except Exception:
-            return False
-
-    def ensure_valid_page(page, page_name):
-        """Ensure page is valid, recreate if needed"""
-        nonlocal page_otodom, page_olx
-        if not is_page_valid(page):
-            logger.warning(f"⚠️ {page_name} page was closed, recreating...")
-            new_page = context.new_page()
-            if page_name == "otodom":
-                page_otodom = new_page
-            else:
-                page_olx = new_page
-            return new_page
-        return page
+            logger.warning(f"⚠️ {scraper.name} page was closed, recreating...")
+            pages[scraper.name] = context.new_page()
+        return pages[scraper.name]
 
     # Batch processing configuration
     BATCH_SIZE = 25
@@ -1161,23 +798,18 @@ def _extract_all_details(context) -> None:
         batch_success_count = 0
         batch_failed_count = 0
 
-        for source, index in current_batch:
+        for scraper, index in current_batch:
             item_start_time = time.time()
 
-            if source == 'otodom':
-                page_otodom = ensure_valid_page(page_otodom, "otodom")
-                success = extract_otodom_details(page_otodom, offers_df, index, processed_count + 1, len(mixed_extraction_plan))
-            else:  # olx
-                page_olx = ensure_valid_page(page_olx, "olx")
-                success = extract_olx_details(page_olx, offers_df, index, processed_count + 1, len(mixed_extraction_plan),
-                                              debug_handler=debug_handler)
+            success = scraper.extract_details(page_for(scraper), offers_df, index, processed_count + 1,
+                                              len(mixed_extraction_plan))
 
             if success:
                 batch_success_count += 1
             else:
                 batch_failed_count += 1
-                failed_extractions.append((source, index))
-                logger.warning(f"⚠️ Failed to extract {source} offer {index}, will retry later")
+                failed_extractions.append((scraper, index))
+                logger.warning(f"⚠️ Failed to extract {scraper.name} offer {index}, will retry later")
 
             processed_count += 1
 
@@ -1243,22 +875,16 @@ def _extract_all_details(context) -> None:
         logger.info(f"🔄 Retrying {len(failed_extractions)} failed extractions...")
         retry_count = 0
 
-        for source, index in failed_extractions[:MAX_RETRIES * 5]:  # Limit retries
+        for scraper, index in failed_extractions[:MAX_RETRIES * 5]:  # Limit retries
             retry_count += 1
-            logger.info(f"🔄 Retry {retry_count}: {source} offer {index}")
+            logger.info(f"🔄 Retry {retry_count}: {scraper.name} offer {index}")
 
-            if source == 'otodom':
-                page_otodom = ensure_valid_page(page_otodom, "otodom")
-                success = extract_otodom_details(page_otodom, offers_df, index, retry_count, len(failed_extractions),
-                                                 is_retry=True)
-            else:
-                page_olx = ensure_valid_page(page_olx, "olx")
-                success = extract_olx_details(page_olx, offers_df, index, retry_count, len(failed_extractions), is_retry=True,
-                                              debug_handler=debug_handler)
+            success = scraper.extract_details(page_for(scraper), offers_df, index, retry_count,
+                                              len(failed_extractions), is_retry=True)
 
             if success:
                 retry_success_count += 1
-                logger.info(f"✅ Retry successful for {source} offer {index}")
+                logger.info(f"✅ Retry successful for {scraper.name} offer {index}")
 
             time.sleep(random.uniform(5.0, 10.0))
 
@@ -1291,27 +917,21 @@ def _extract_all_details(context) -> None:
 
 
 def run(playwright: Playwright) -> None:
-    """Scrape one search profile: listings from both portals, then every offer's details."""
-    run_olx_url, run_otodom_url = _load_run_config()
+    """Scrape one search profile: listings from every portal, then every offer's details."""
+    _load_run_config()
     browser, context = _launch_browser(playwright)
     max_pages = int(os.environ.get('DEBUG_MAX_PAGES', '')) if os.environ.get('DEBUG_MAX_PAGES') else None
 
-    page2 = _scrape_olx_listings(context, run_olx_url, max_pages)
-    page = _scrape_otodom_listings(context, run_otodom_url)
-
-    # Close listing pages before detailed extraction
-    try:
-        page.close()
-        page2.close()
-    except Exception:
-        pass
+    scrapers = make_scrapers()
+    for scraper in scrapers:
+        _add_offers(scraper.collect_listings(context, _run_config[f"{scraper.name}_url"], max_pages))
 
     _finish_listing_phase()
 
     logger.info("🕰️ Waiting 3 seconds before starting detailed extraction...")
     time.sleep(3)
 
-    _extract_all_details(context)
+    _extract_all_details(context, scrapers)
 
 
 def _load_offers_pickle() -> pd.DataFrame:

@@ -1132,3 +1132,23 @@ class TestDishwasherColumn:
     def test_no_source_columns(self):
         df = pd.DataFrame({"Link": ["a"]})
         assert parsing_description.add_dishwasher_column(df)["Dishwasher"].tolist() == ["No"]
+
+
+# =============================================================================
+# TEST PortalScraper implementations
+# =============================================================================
+
+class TestPortalScrapers:
+    def test_olx_and_otodom_implement_the_protocol(self):
+        from scrapers.base import PortalScraper
+        from scrapers.olx import OlxScraper
+        from scrapers.otodom import OtodomScraper
+        for scraper in (OlxScraper(), OtodomScraper()):
+            assert isinstance(scraper, PortalScraper)
+
+    def test_names_match_saved_html_prefixes_and_config_keys(self):
+        # --reextract picks the scraper by file prefix, run() reads "<name>_url" from the config
+        from scrapers.olx import OlxScraper
+        from scrapers.otodom import OtodomScraper
+        assert (OlxScraper.name, OlxScraper.domain) == ("olx", "olx.pl")
+        assert (OtodomScraper.name, OtodomScraper.domain) == ("otodom", "otodom.pl")

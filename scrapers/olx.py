@@ -3,6 +3,7 @@ import logging
 import random
 import re
 import time
+from typing import Any, Dict, List, Optional
 
 from bs4 import BeautifulSoup
 
@@ -10,7 +11,7 @@ from logging_config import log_extraction_attempt, log_extraction_result
 from parsing.dates import parse_polish_date
 from parsing.prices import extract_price_from_text
 from parsing.selectors import find_element_by_selectors
-from scrapers.common import save_html_to_file
+from scrapers.common import save_html_to_file, save_listing_page_html, scroll_alot
 from scrapers.dedup import is_duplicate_offer
 
 logger = logging.getLogger("logging_config")
@@ -701,3 +702,131 @@ def _extract_olx_from_soup(soup, index: int) -> dict:
         import traceback
         logger.debug(traceback.format_exc())
         return None
+
+
+def collect_olx_listings(context, url: str, max_pages: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Walk the OLX search result pages and return one row per offer, deduplicated by link."""
+    rows: List[Dict[str, Any]] = []
+    page2 = context.new_page()
+    page2.goto(url, timeout=60000)
+    try:
+        accept_button = page2.get_by_role("button", name="Akceptuję")
+        if accept_button.count() > 0:
+            accept_button.click(timeout=10000)
+            logger.info("✅ Clicked OLX accept cookies button")
+        else:
+            logger.info("ℹ️ No OLX 'Akceptuję' button found, trying OneTrust accept-all...")
+            try:
+                onetrust_btn = page2.locator("#onetrust-accept-btn-handler, .ot-btn-accept-all, button#accept-all-button")
+                if onetrust_btn.count() > 0:
+                    onetrust_btn.first.click(timeout=5000)
+                    logger.info("✅ Clicked OneTrust accept-all button")
+                    page2.wait_for_selector("#onetrust-consent-sdk", state="hidden", timeout=5000)
+                else:
+                    logger.info("ℹ️ No cookie consent button found")
+            except Exception as e2:
+                logger.warning(f"⚠️ Could not dismiss OneTrust: {e2}")
+                # Force-hide the overlay via JS as last resort
+                try:
+                    page2.evaluate("document.getElementById('onetrust-consent-sdk')?.remove()")
+                    logger.info("✅ Removed OneTrust overlay via JS")
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning(f"⚠️ Could not click OLX accept button: {e}")
+    scroll_alot(page2)
+    next_btn = page2.get_by_test_id("pagination-forward")
+    current_page_number = page2.locator("li.pagination-item__active")
+    last_page_number = page2.locator('ul[data-testid="pagination-list"] li').last
+    olx_html = page2.inner_html("body")
+    # Save listing page HTML
+    save_listing_page_html(olx_html, 1, source="olx")
+    page_rows = scrape_olx(olx_html)
+    rows.extend(page_rows)
+    olx_added = len(page_rows)
+    logger.info(f"OLX page 1 added {olx_added} offers")
+
+    try:
+        logger.debug(f'OLX page: {current_page_number.inner_text(timeout=3000)} / {last_page_number.inner_text(timeout=3000)}')
+    except Exception:
+        pass
+    
+    page_count = 1  # Track page count for debug mode
+    while next_btn.count() > 0:
+        # Check if we've reached max pages limit
+        if max_pages and page_count >= max_pages:
+            logger.info(f"🛑 Reached max_pages limit of {max_pages}")
+            break
+            
+        next_btn = page2.get_by_test_id("pagination-forward")
+        # Dismiss any cookie overlay before clicking pagination
+        try:
+            page2.evaluate("document.getElementById('onetrust-consent-sdk')?.remove()")
+        except Exception:
+            pass
+        next_btn.click()
+        time.sleep(0.2)
+        scroll_alot(page2)
+        time.sleep(0.4)
+        next_btn = page2.get_by_test_id("pagination-forward")
+        current_page_number = page2.locator("li.pagination-item__active")
+        last_page_number = page2.locator('ul[data-testid="pagination-list"] li').last
+        
+        page_count += 1  # Increment page counter
+        
+        try:
+            current_page_text = current_page_number.inner_text(timeout=5000)
+            last_page_text = last_page_number.inner_text(timeout=5000)
+            logger.debug(f'OLX page: {current_page_text} / {last_page_text}')
+        except Exception as e:
+            logger.warning(f"⚠️ Could not get page numbers: {e}")
+            current_page_text = "unknown"
+        
+        olx_html = page2.inner_html("body")
+        # Save listing page HTML
+        save_listing_page_html(olx_html, page_count, source="olx")
+        page_rows = scrape_olx(olx_html)
+        rows.extend(page_rows)
+        olx_added = len(page_rows)
+
+        try:
+            if current_page_text != "unknown":
+                logger.info(f"OLX page {current_page_text} added {olx_added} offers")
+            else:
+                logger.info(f"OLX page added {olx_added} offers")
+        except:
+            logger.info(f"OLX page added {olx_added} offers")
+
+    try:
+        page2.close()
+    except Exception:
+        pass
+
+    logger.debug(f'OLX offers before dedup: {len(rows)}')
+    unique: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        if row.get('Link') != "olx.pl/":
+            unique.setdefault(row.get('Link'), row)
+    rows = list(unique.values())
+    logger.info(f'OLX offers after dedup: {len(rows)}')
+    return rows
+
+
+class OlxScraper:
+    """PortalScraper for olx.pl."""
+
+    name = "olx"
+    domain = "olx.pl"
+
+    def __init__(self, debug_handler=None):
+        self.debug_handler = debug_handler
+
+    def collect_listings(self, context, url: str, max_pages: Optional[int] = None) -> List[Dict[str, Any]]:
+        return collect_olx_listings(context, url, max_pages)
+
+    def extract_details(self, page, offers_df, index, current_num, total_num, is_retry=False) -> bool:
+        return extract_olx_details(page, offers_df, index, current_num, total_num, is_retry=is_retry,
+                                   debug_handler=self.debug_handler)
+
+    def extract_from_soup(self, soup, index) -> Dict[str, Any]:
+        return _extract_olx_from_soup(soup, index)
