@@ -3,6 +3,7 @@ import logging
 import random
 import re
 import time
+from typing import Any, Dict, List, Optional
 
 from bs4 import BeautifulSoup
 
@@ -15,7 +16,7 @@ from parsing.selectors import (
     find_element_by_selectors,
     find_elements_by_selectors,
 )
-from scrapers.common import save_html_to_file
+from scrapers.common import save_html_to_file, save_listing_page_html, scroll_alot
 from scrapers.dedup import is_duplicate_offer
 
 logger = logging.getLogger("logging_config")
@@ -1003,3 +1004,287 @@ def _extract_otodom_from_soup(soup, index: int) -> dict:
         import traceback
         logger.debug(traceback.format_exc())
         return None
+
+
+def collect_otodom_listings(context, url: str, max_pages: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Walk the Otodom search result pages and return one row per offer."""
+    rows: List[Dict[str, Any]] = []
+    page = context.new_page()
+
+    # Add retry logic for page loading
+    max_retries = 3
+    page_loaded_successfully = False
+
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Loading Otodom page (attempt {attempt + 1}/{max_retries})")
+            page.goto(url, timeout=50000, wait_until="domcontentloaded")
+            
+            # Wait for page content with multiple verification strategies
+            try:
+                # Wait for network idle to ensure basic content is loaded
+                page.wait_for_load_state('networkidle', timeout=30000)
+                time.sleep(1)  # Extra grace period for JavaScript rendering
+                
+                # Strategy 1: Check for listing container elements (most reliable)
+                page_html = page.inner_html("body")
+                has_listings = False
+                has_content = False
+                listing_count = 0
+                
+                # Try to find listings using multiple selectors
+                try:
+                    # Primary selector for Otodom listings
+                    listings = page.locator('div[data-testid="listing-item"]')
+                    listing_count = listings.count()
+                    if listing_count > 0:
+                        has_listings = True
+                        logger.info(f"✅ Found {listing_count} listings via primary selector")
+                    else:
+                        logger.debug("ℹ️ No listings found via primary selector (data-testid=listing-item)")
+                except Exception as e:
+                    logger.debug(f"ℹ️ Primary selector check failed: {e}")
+                
+                # Fallback: Check for any listing-like containers
+                if not has_listings:
+                    try:
+                        articles = page.locator('article')
+                        article_count = articles.count()
+                        if article_count > 0:
+                            has_listings = True
+                            listing_count = article_count
+                            logger.info(f"✅ Found {article_count} listings via fallback selector (article)")
+                        else:
+                            logger.debug("ℹ️ No articles found on page")
+                    except Exception as e:
+                        logger.debug(f"ℹ️ Article selector check failed: {e}")
+                
+                # Fallback: Check for divs with specific classes
+                if not has_listings:
+                    try:
+                        listing_divs = page.locator('div[class*="listing"]')
+                        div_count = listing_divs.count()
+                        if div_count > 0:
+                            has_listings = True
+                            listing_count = div_count
+                            logger.info(f"✅ Found {div_count} potential listings via div selector")
+                        else:
+                            logger.debug("ℹ️ No divs with 'listing' in class found")
+                    except Exception as e:
+                        logger.debug(f"ℹ️ Div selector check failed: {e}")
+                
+                # Fallback: Check HTML content for indicators
+                if not has_listings:
+                    has_content = len(page_html) > 5000
+                    has_text_indicators = (
+                        'oferta' in page_html.lower() or 
+                        'listing' in page_html.lower() or 
+                        'zł' in page_html or
+                        'wynajm' in page_html.lower()
+                    )
+                    
+                    logger.debug(f"ℹ️ HTML check: size={len(page_html)} bytes, has_indicators={has_text_indicators}")
+                    
+                    if has_content and has_text_indicators:
+                        logger.info(f"✅ Page has content (HTML size: {len(page_html)} bytes)")
+                        has_listings = True
+                
+                if has_listings:
+                    logger.info("✅ Page loaded successfully with content")
+                    page_loaded_successfully = True
+                    break
+                else:
+                    logger.warning(f"⚠️ Page appears empty on attempt {attempt + 1} (no listings found)")
+                    if attempt < max_retries - 1:
+                        time.sleep(5)
+                        continue
+                        
+            except Exception as e:
+                logger.warning(f"⚠️ Page load timeout on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(5)
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"❌ Failed to load page on attempt {attempt + 1}: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(5)
+                continue
+
+    # NOW this is at the correct indentation level (outside the for loop)
+    # Skip Otodom but continue to detailed extraction
+    # After the for loop, before the if statement
+    if 'page_loaded_successfully' not in locals():
+        page_loaded_successfully = False
+        logger.error("⚠️ page_loaded_successfully was not set - defaulting to False")
+
+    if not page_loaded_successfully:
+        logger.error("❌ Otodom listing scraping skipped due to page load failure")
+        logger.info("⚠️ Continuing without Otodom offers - will extract details for the rest")
+        try:
+            page.close()
+        except:
+            pass
+        
+    else:
+        try:
+            accept_button = page.get_by_role("button", name="Akceptuję")
+            if accept_button.count() > 0:
+                accept_button.click()
+                logger.info("✅ Clicked accept cookies button")
+            else:
+                logger.info("ℹ️ No accept button found")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not click accept button: {e}")
+        
+        scroll_alot(page)
+        time.sleep(1)
+        page_html = page.inner_html("body")
+        # Save listing page HTML
+        save_listing_page_html(page_html, 1, source="otodom")
+
+        # Initial scrape after loading first page
+        page_rows = scrape_otodom_working(page_html)
+        rows.extend(page_rows)
+        otodom_added = len(page_rows)
+        logger.info(f"Otodom initial page added {otodom_added} offers")
+
+        # Updated selectors for the pagination elements
+        try:
+            # Try new selector first, fall back to old one
+            ul_nav = page.locator("ul[data-cy='nexus-pagination-component']")
+            if ul_nav.count() == 0:
+                ul_nav = page.locator("[data-cy='search-list-pagination'] nav ul, [data-sentry-component='BasePagination'] ul")
+            ul_nav.wait_for(timeout=10000)
+
+            all_items = ul_nav.locator("li")
+            logger.info(f"Pagination items found: {all_items.count()}")
+            
+            # Your pagination logic continues here...
+            def go_to_next_page(page) -> bool:
+                """Clicks the 'Next' pagination item if enabled. Returns False on last page."""
+                logger.debug("Checking pagination for NEXT button...")
+
+                scroll_alot(page)
+                time.sleep(1)
+
+                pagination = ul_nav
+                pagination.wait_for(state="visible", timeout=30000)
+
+                # The aria-label is on the BUTTON, not on the LI
+                next_btn = pagination.locator("button[aria-label='Go to next Page']").first
+
+                if next_btn.count() == 0:
+                    # Try alternative selector
+                    next_btn = pagination.locator("button[title='Go to next Page']").first
+
+                if next_btn.count() == 0:
+                    logger.debug("No next button found – assuming last page.")
+                    return False
+
+                # Check if button is disabled
+                is_disabled = next_btn.is_disabled()
+                logger.debug(f"Next button disabled: {is_disabled}")
+
+                if is_disabled:
+                    logger.debug("Next button is disabled – reached last page.")
+                    return False
+
+                logger.debug("Clicking NEXT button...")
+                next_btn.click()
+                page.wait_for_timeout(1500)
+                return True
+
+            page_index = 1
+
+            while True:
+                logger.info(f"Scraping Otodom page {page_index}")
+                scroll_alot(page)
+                time.sleep(1)
+                scroll_alot(page)
+                html_now = page.content()
+                # Save listing page HTML
+                save_listing_page_html(html_now, page_index, source="otodom")
+                page_rows = scrape_otodom_working(html_now)
+                rows.extend(page_rows)
+                page_added = len(page_rows)
+                logger.info(f"Otodom page {page_index} added {page_added} offers")
+
+                # Get current selected page number before clicking next
+                try:
+                    # aria-current is on the BUTTON, not the LI
+                    selected_locator = ul_nav.locator("button[aria-current='true']").first
+                    selected_before = selected_locator.inner_text().strip()
+                    logger.debug(f"Currently selected page: {selected_before}")
+                except Exception:
+                    selected_before = "?"
+                    logger.debug("Could not read currently selected page.")
+
+                if max_pages and page_index >= max_pages:
+                    logger.info(f"🛑 Reached max_pages limit of {max_pages}")
+                    break
+
+                # Try to move to next page
+                if not go_to_next_page(page):
+                    logger.info(f"No more pages after page {page_index}. Stopping.")
+                    break
+
+                logger.debug(f"Waiting for page to change from {selected_before}...")
+
+                try:
+                    page.wait_for_function(
+                        """
+                        ([sel, before]) => {
+                            const el = document.querySelector(sel);
+                            if (!el) return false;
+                            const cur = el.textContent.trim();
+                            return cur && cur !== before;
+                        }
+                        """,
+                        arg=["ul[data-cy='nexus-pagination-component'] button[aria-current='true']", selected_before],
+                        timeout=8000
+                    )
+                    logger.debug("Page changed successfully.")
+                except Exception:
+                    logger.debug("Page change timed out – checking if page actually changed...")
+                    # Check if page changed despite timeout
+                    try:
+                        selected_after = ul_nav.locator("button[aria-current='true']").first.inner_text().strip()
+                        if selected_after == selected_before:
+                            logger.debug(f"Page still on {selected_before} – stopping pagination.")
+                            break
+                        else:
+                            logger.debug(f"Page did change to {selected_after} – continuing.")
+                    except Exception:
+                        logger.debug("Could not verify page change – stopping.")
+                        break
+
+                page_index += 1
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Otodom pagination not available (single page of results): {e}")
+            logger.info("Continuing with offers collected from first page only")
+
+    try:
+        page.close()
+    except Exception:
+        pass
+
+    logger.info("Otodom scraping complete")
+    return rows
+
+
+class OtodomScraper:
+    """PortalScraper for otodom.pl."""
+
+    name = "otodom"
+    domain = "otodom.pl"
+
+    def collect_listings(self, context, url: str, max_pages: Optional[int] = None) -> List[Dict[str, Any]]:
+        return collect_otodom_listings(context, url, max_pages)
+
+    def extract_details(self, page, offers_df, index, current_num, total_num, is_retry=False) -> bool:
+        return extract_otodom_details(page, offers_df, index, current_num, total_num, is_retry=is_retry)
+
+    def extract_from_soup(self, soup, index) -> Dict[str, Any]:
+        return _extract_otodom_from_soup(soup, index)

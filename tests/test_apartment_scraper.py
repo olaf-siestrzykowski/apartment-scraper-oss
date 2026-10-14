@@ -12,6 +12,7 @@ Tests cover:
 - Selector helper functions
 """
 
+import argparse
 import pandas as pd
 import pytest
 import sys
@@ -23,6 +24,7 @@ from bs4 import BeautifulSoup
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import apartment_scraper as ms
+import pipeline  # noqa: E402
 import geo  # noqa: E402
 from sinks import sheets  # noqa: E402
 from scrapers import dedup  # noqa: E402
@@ -1027,7 +1029,7 @@ class FakeSpreadsheet:
 
     def worksheet(self, title):
         if title not in self.sheets:
-            raise ms.gspread.WorksheetNotFound(title)
+            raise pipeline.gspread.WorksheetNotFound(title)
         return self.sheets[title]
 
     def add_worksheet(self, title, rows, cols):
@@ -1036,26 +1038,26 @@ class FakeSpreadsheet:
         return self.sheets[title]
 
 
+def _ctx(profile=None, **kwargs):
+    return pipeline.RunContext(args=argparse.Namespace(), profile=profile or {}, **kwargs)
+
+
 class TestListingsWorksheet:
-    def test_default_name(self, monkeypatch):
-        monkeypatch.setattr(ms, "_profile", {})
-        assert ms.listings_worksheet_name() == "apartment list"
+    def test_default_name(self):
+        assert _ctx().worksheet_name == "apartment list"
 
-    def test_profile_can_choose_the_tab(self, monkeypatch):
-        monkeypatch.setattr(ms, "_profile", {"worksheet": "lista mieszkan (AI)"})
-        assert ms.listings_worksheet_name() == "lista mieszkan (AI)"
+    def test_profile_can_choose_the_tab(self):
+        assert _ctx({"worksheet": "lista mieszkan (AI)"}).worksheet_name == "lista mieszkan (AI)"
 
-    def test_existing_tab_is_reused(self, monkeypatch):
-        monkeypatch.setattr(ms, "_profile", {})
+    def test_existing_tab_is_reused(self):
         sheet = FakeSpreadsheet([FakeWorksheet("apartment list")])
-        assert ms.open_listings_worksheet(sheet).title == "apartment list"
+        assert pipeline.open_listings_worksheet(sheet, "apartment list").title == "apartment list"
         assert sheet.created == []
 
-    def test_missing_tab_is_created(self, monkeypatch):
+    def test_missing_tab_is_created(self):
         # A spreadsheet made by hand (or by another tool) may not have the tab yet
-        monkeypatch.setattr(ms, "_profile", {"worksheet": "lista mieszkan (AI)"})
         sheet = FakeSpreadsheet([FakeWorksheet("config"), FakeWorksheet("lista mieszkan")])
-        assert ms.open_listings_worksheet(sheet).title == "lista mieszkan (AI)"
+        assert pipeline.open_listings_worksheet(sheet, "lista mieszkan (AI)").title == "lista mieszkan (AI)"
         assert sheet.created == ["lista mieszkan (AI)"]
 
 
@@ -1098,16 +1100,16 @@ class TestListingScrapersReturnRows:
         assert scrape_olx("") == []
         assert scrape_otodom_working("<html></html>") == []
 
-    def test_add_offers_appends_and_counts(self, monkeypatch):
-        monkeypatch.setattr(ms, "offers_df", pd.DataFrame([{"Link": "a"}]))
-        assert ms._add_offers([{"Link": "b"}, {"Link": "c"}]) == 2
-        assert ms.offers_df["Link"].tolist() == ["a", "b", "c"]
+    def test_add_offers_appends_and_counts(self):
+        ctx = _ctx(offers_df=pd.DataFrame([{"Link": "a"}]))
+        assert ctx.add_offers([{"Link": "b"}, {"Link": "c"}]) == 2
+        assert ctx.offers_df["Link"].tolist() == ["a", "b", "c"]
 
-    def test_add_offers_with_no_rows_keeps_the_frame(self, monkeypatch):
+    def test_add_offers_with_no_rows_keeps_the_frame(self):
         df = pd.DataFrame([{"Link": "a"}])
-        monkeypatch.setattr(ms, "offers_df", df)
-        assert ms._add_offers([]) == 0
-        assert ms.offers_df is df
+        ctx = _ctx(offers_df=df)
+        assert ctx.add_offers([]) == 0
+        assert ctx.offers_df is df
 
 
 # =============================================================================
@@ -1132,3 +1134,100 @@ class TestDishwasherColumn:
     def test_no_source_columns(self):
         df = pd.DataFrame({"Link": ["a"]})
         assert parsing_description.add_dishwasher_column(df)["Dishwasher"].tolist() == ["No"]
+
+
+# =============================================================================
+# TEST PortalScraper implementations
+# =============================================================================
+
+class TestPortalScrapers:
+    def test_olx_and_otodom_implement_the_protocol(self):
+        from scrapers.base import PortalScraper
+        from scrapers.olx import OlxScraper
+        from scrapers.otodom import OtodomScraper
+        for scraper in (OlxScraper(), OtodomScraper()):
+            assert isinstance(scraper, PortalScraper)
+
+    def test_names_match_saved_html_prefixes_and_config_keys(self):
+        # --reextract picks the scraper by file prefix, run() reads "<name>_url" from the config
+        from scrapers.olx import OlxScraper
+        from scrapers.otodom import OtodomScraper
+        assert (OlxScraper.name, OlxScraper.domain) == ("olx", "olx.pl")
+        assert (OtodomScraper.name, OtodomScraper.domain) == ("otodom", "otodom.pl")
+
+
+# =============================================================================
+# TEST pipeline stages with fake portals
+# =============================================================================
+
+class FakeScraper:
+    def __init__(self, name, fail_first=()):
+        self.name = name
+        self.domain = f"{name}.pl"
+        self.fail_first = set(fail_first)
+        self.calls = []
+
+    def collect_listings(self, context, url, max_pages=None):
+        return []
+
+    def extract_details(self, page, offers_df, index, current_num, total_num, is_retry=False):
+        self.calls.append((index, is_retry))
+        if index in self.fail_first and not is_retry:
+            return False
+        offers_df.at[index, "Title"] = f"{self.name} {index}"
+        return True
+
+    def extract_from_soup(self, soup, index):
+        return {"Title": soup.title.string}
+
+
+class FakePage:
+    url = "about:blank"
+
+
+class FakeContext:
+    def new_page(self):
+        return FakePage()
+
+
+class TestExtractAllDetails:
+    @pytest.fixture(autouse=True)
+    def no_waiting(self, monkeypatch):
+        monkeypatch.setattr(pipeline.time, "sleep", lambda s: None)
+        monkeypatch.setattr(pipeline, "save_full_data_to_sheets", lambda ctx: None)
+        monkeypatch.delenv("DEBUG_MAX_EXTRACTIONS", raising=False)
+
+    def _ctx_with_offers(self):
+        links = ["https://www.olx.pl/1", "https://www.otodom.pl/2", "https://www.olx.pl/3"]
+        return _ctx(offers_df=pd.DataFrame({"Link": links, "Base_value": [1000, 2000, 3000]}))
+
+    def test_each_offer_goes_to_the_scraper_for_its_domain(self):
+        ctx = self._ctx_with_offers()
+        olx, otodom = FakeScraper("olx"), FakeScraper("otodom")
+        pipeline._extract_all_details(ctx, FakeContext(), [olx, otodom])
+        assert sorted(i for i, _ in olx.calls) == [0, 2]
+        assert [i for i, _ in otodom.calls] == [1]
+        assert ctx.offers_df["Title"].tolist() == ["olx 0", "otodom 1", "olx 2"]
+
+    def test_failed_offers_are_retried_by_the_same_scraper(self):
+        ctx = self._ctx_with_offers()
+        olx, otodom = FakeScraper("olx", fail_first={2}), FakeScraper("otodom")
+        pipeline._extract_all_details(ctx, FakeContext(), [olx, otodom])
+        assert (2, True) in olx.calls
+        assert ctx.offers_df.at[2, "Title"] == "olx 2"
+
+
+class TestReextractFromSavedHtml:
+    def test_scraper_is_picked_by_file_prefix(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pipeline, "make_scrapers", lambda debug_handler=None: [FakeScraper("olx")])
+        (tmp_path / "olx_0_2026_x.html").write_text("<title>Saved title</title>", encoding="utf-8")
+        (tmp_path / "nope_1_2026_x.html").write_text("<title>Ignored</title>", encoding="utf-8")
+        df = pd.DataFrame({"Link": ["a", "b"], "Title": ["", ""]})
+        out = pipeline.reextract_from_saved_html(df, html_folder=str(tmp_path))
+        assert out["Title"].tolist() == ["Saved title", ""]
+        assert df["Title"].tolist() == ["", ""]  # input left untouched
+
+
+class TestCli:
+    def test_first_profile_is_the_default_search(self):
+        assert ms.build_arg_parser(["gdansk", "warszawa"]).parse_args([]).search == "gdansk"

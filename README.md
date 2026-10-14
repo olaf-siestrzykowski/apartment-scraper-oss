@@ -365,8 +365,9 @@ pytest tests/ -v
 
 | File | Purpose |
 |---|---|
-| `apartment_scraper.py` | CLI and run orchestration: browser session, pagination, saving progress, re-extraction mode |
-| `scrapers/` | Portal scrapers: `olx.py` and `otodom.py` parse search result pages into offer rows and fill in details from each offer page; `dedup.py` drops offers already seen in this run (same link, or same title and price across portals); `common.py` holds scrolling and HTML snapshots |
+| `apartment_scraper.py` | CLI: picks the search profile from `profiles.json`, builds a `RunContext` and runs the pipeline stages |
+| `pipeline.py` | Run stages - config, listing collection, detail extraction in batches, enrichment, delivery, re-extraction/distance modes. Each stage takes an explicit `RunContext` (profile, CLI options, config-sheet values, offers DataFrame) instead of module globals |
+| `scrapers/` | Portal scrapers implementing the `PortalScraper` protocol (`base.py`): `olx.py` and `otodom.py` walk search result pages into offer rows and fill in details from each offer page; `dedup.py` drops offers already seen in this run (same link, or same title and price across portals); `common.py` holds scrolling and HTML snapshots. A new portal is one class plus an entry in `pipeline.make_scrapers()` |
 | `geo.py` | Geocoding (Nominatim with Photon fallback, city bounding boxes) and commute distances via the OpenRouteService Matrix API |
 | `sinks/` | Output destinations: Google Sheets config tab, status columns and header translation (`sheets.py`), Telegram alerts (`telegram.py`) |
 | `parsing/` | Pure parsing helpers with no browser, network or global state: prices and total cost (`prices.py`), Polish dates (`dates.py`), addresses (`addresses.py`), fields from the description (`description.py`), selector fallbacks (`selectors.py`), offer keys and validation (`offers.py`) |
@@ -444,7 +445,7 @@ an explicit "czynsz administracyjny: wliczony w wynajem". Groq sometimes returns
 
 OLX and Otodom occasionally change their markup, which breaks CSS selectors. If a
 scrape returns zero results, check the selector dictionaries near the top of
-`apartment_scraper.py` (`OLX_SELECTORS`, `OTODOM_LISTING_SELECTORS`,
+`scrapers/olx.py` (`OLX_SELECTORS`) and `scrapers/otodom.py` (`OTODOM_LISTING_SELECTORS`,
 `OTODOM_DETAIL_SELECTORS`) against the live page's HTML and update as needed.
 
 ## License
