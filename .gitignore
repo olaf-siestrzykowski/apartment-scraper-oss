@@ -22,3 +22,8 @@ __pycache__/
 
 # Scheduler state
 scheduler_state.json
+
+# Local preview / browser-automation artifacts
+.playwright-mcp/
+*_preview.html
+*preview.png
